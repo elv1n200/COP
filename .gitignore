@@ -36,3 +36,4 @@ dist/
 
 # --- Local secrets / per-machine config -----------------------------
 local.properties
+.tmp_src/
