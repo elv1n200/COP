@@ -1,0 +1,134 @@
+package cop.module.settings.impl
+
+import com.google.gson.JsonElement
+import com.google.gson.JsonPrimitive
+import cop.api.abobaui.constraints.impl.positions.Centre
+import cop.api.abobaui.constraints.impl.size.Bounding
+import cop.api.abobaui.constraints.impl.size.Copying
+import cop.api.abobaui.dsl.*
+import cop.api.abobaui.elements.ElementScope
+import cop.api.abobaui.elements.impl.Block.Companion.outline
+import cop.api.abobaui.elements.impl.Popup
+import cop.api.abobaui.elements.impl.Text.Companion.string
+import cop.api.animations.Animation
+import cop.api.colour.Colour
+import cop.api.input.CursorShape
+import cop.module.settings.Saving
+import cop.module.settings.UIComponent
+import cop.utils.ThemeManager.theme
+import cop.utils.ui.cursor
+import cop.utils.ui.elements.selector
+import cop.utils.ui.popupX
+import cop.utils.ui.popupY
+
+class SelectorComponent<T>(
+    name: String,
+    val defaultSelected: T,
+    var options: List<T>,
+    desc: String = ""
+) : UIComponent<SelectorComponent<T>>(name, desc), Saving {
+
+    override val default: SelectorComponent<T> = this
+
+    override var value: SelectorComponent<T>
+        get() = this
+        set(value) { index = value.index }
+
+    var index: Int = optionIndex(defaultSelected)
+        set(value) {
+            field = if (options.isEmpty()) 0
+            else if (value > options.size - 1) 0
+            else if (value < 0) options.size - 1
+            else value
+        }
+
+    var selected: T
+        get() = if (options.isNotEmpty()) options[index] else defaultSelected
+        set(value) {
+            index = optionIndex(value)
+        }
+
+    private val selectedName get() = nameOf(selected)
+
+    private fun nameOf(item: T) =
+        if (item is Enum<*>) item.name.replace(Regex("(?<=[a-z])(?=[A-Z])"), " ") else item.toString()
+
+    private fun optionIndex(value: T): Int = options.indexOf(value).coerceAtLeast(0)
+
+    override fun write(): JsonElement = JsonPrimitive(selectedName)
+
+    override fun read(element: JsonElement) {
+        element.asString?.let { str ->
+            val found = options.find { nameOf(it).equals(str, ignoreCase = true) }
+            if (found != null) selected = found
+        }
+    }
+
+    override fun hashCode(): Int = index
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SelectorComponent<*>) return false
+        return name == other.name && options == other.options
+    }
+
+    var popup: Popup? = null
+    override fun ElementScope<*>.draw(asSub: Boolean): ElementScope<*> = group(size(w = Copying)) { // will suck with long names..
+        text(
+            string = name,
+            size = theme.textSize,
+            colour = theme.onSurfaceVariant,
+            pos = at(x = 0.px, y = Centre)
+        )
+
+        val outlineCol = Colour.Animated(
+            from = theme.outline,
+            to = theme.primary
+        )
+
+        block(
+            constrain(x = 0.px.alignOpposite, w = Bounding + 5.px, h = if (asSub) Bounding else 20.px),
+            colour = theme.surfaceContainerHighest,
+            if (asSub) 4.radius() else 5.radius()
+        ) {
+            outline(outlineCol, thickness = 2.px)
+            cursor(CursorShape.HAND)
+
+            text(
+                string = selectedName,
+                size = theme.textSize,
+                colour = theme.onSurface
+            ) {
+                onValueChanged {
+                    string = selectedName
+                }
+            }
+
+            onMouseEnterExit {
+                outlineCol.animate(0.25.seconds, Animation.Style.Linear)
+            }
+
+            onClick {
+                popup?.closePopup()
+                val (x, y) = popupX(gap = -130f) to popupY(gap = 5f, corner = true)
+                popup = selector(
+                    entries = options,
+                    selected = index,
+                    displayString = { nameOf(it) },
+                    pos = at(x, y)
+                ) { new ->
+                    selected = new
+                }
+                true
+            }
+
+            onClick(button = 1) {
+                index++
+                true
+            }
+        }
+    }
+}
+
+inline fun <reified E : Enum<E>> SelectorComponent(name: String, default: E, desc: String = ""): SelectorComponent<E> =
+    SelectorComponent(name, default, default.declaringJavaClass.enumConstants.toList(), desc)

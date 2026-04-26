@@ -1,0 +1,82 @@
+package cop.module.settings.impl
+
+import cop.api.abobaui.constraints.impl.positions.Centre
+import cop.api.abobaui.constraints.impl.size.AspectRatio
+import cop.api.abobaui.constraints.impl.size.Copying
+import cop.api.abobaui.dsl.*
+import cop.api.abobaui.elements.ElementScope
+import cop.api.abobaui.elements.impl.Block.Companion.outline
+import cop.api.animations.Animation
+import cop.api.colour.Colour
+import cop.module.settings.Saving
+import cop.module.settings.UIComponent
+import cop.utils.ThemeManager.theme
+import cop.utils.ui.elements.switch
+import com.google.gson.JsonElement
+import com.google.gson.JsonPrimitive
+import cop.utils.ui.watch
+
+
+class SwitchComponent(
+    name: String,
+    override val default: Boolean = false,
+    desc: String = "",
+) : UIComponent<Boolean>(name, desc), Saving{
+
+    override var value: Boolean = default
+    var enabled: Boolean by this::value
+
+    override fun write(): JsonElement = JsonPrimitive(enabled)
+
+    override fun read(element: JsonElement) {
+        enabled = element.asBoolean
+    }
+
+    override fun ElementScope<*>.draw(asSub: Boolean): ElementScope<*> = row(size(Copying), gap = 4.px) {
+        val col = Colour.Animated(
+            from = theme.surfaceVariant,
+            to = theme.primary,
+            swapIf = value
+        )
+
+        val outlineCol = Colour.Animated(
+            from = theme.outline,
+            to = theme.primary,
+            swapIf = value
+        )
+
+        fun label() = text(
+            string = name,
+            size = theme.textSize,
+            colour = theme.onSurfaceVariant,
+            pos = at(y = Centre)
+        )
+
+        if (asSub) {
+            block(
+                size(w = AspectRatio(1f), h = 15.px),
+                colour = col,
+                radius = 4.radius()
+            ) {
+                outline(outlineCol, 2.px)
+//                hoverEffect(factor = 1.15f)
+                tonalHover()
+
+                watch(::value) {
+                    col.animate(0.25.seconds, Animation.Style.EaseInOutQuint)
+                    outlineCol.animate(0.25.seconds, Animation.Style.EaseInOutQuint)
+                }
+
+                onClick {
+                    value = !value
+                    true
+                }
+            }
+            label()
+        } else {
+            label()
+            switch(::value, size = 20.px, pos = at(x = 0.px.alignOpposite, y = Centre))
+        }
+    }
+
+}

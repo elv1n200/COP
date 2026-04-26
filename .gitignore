@@ -1,0 +1,38 @@
+# --- Gradle ---------------------------------------------------------
+.gradle/
+build/
+out/
+bin/
+!gradle/wrapper/gradle-wrapper.jar
+
+# --- Stonecutter ----------------------------------------------------
+# `versions/` is generated on the fly by `stonecutterGenerate`. The
+# actual per-version source preprocessing output lives under
+# `versions/<v>/build/` and gets recreated every build.
+versions/
+
+# --- IDE files ------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.code-workspace
+.fleet/
+
+# --- Loom dev environment ------------------------------------------
+run/
+runs/
+remappedSrc/
+
+# --- OS junk --------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Output / artifacts --------------------------------------------
+dist/
+*.log
+
+# --- Local secrets / per-machine config -----------------------------
+local.properties

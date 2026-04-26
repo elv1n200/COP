@@ -1,0 +1,151 @@
+package cop.api.abobaui.elements.impl
+
+import cop.CopMod.mc
+import cop.api.abobaui.constraints.Constraint
+import cop.api.abobaui.constraints.Positions
+import cop.api.abobaui.dsl.at
+import cop.api.abobaui.dsl.percent
+import cop.api.abobaui.dsl.px
+import cop.api.abobaui.dsl.withScale
+import cop.api.abobaui.elements.AbobaDSL
+import cop.api.abobaui.elements.Element
+import cop.api.abobaui.elements.ElementScope
+import cop.api.colour.Colour
+import cop.api.colour.multiply
+import cop.utils.StringUtils.width
+import cop.utils.render.DrawContextUtils.drawText
+import cop.utils.ui.rendering.Font
+import cop.utils.ui.rendering.NVGRenderer
+import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.TextColor
+import net.minecraft.util.FormattedCharSequence
+import cop.utils.StringUtils.FORMATTING_CODE_PATTERN
+import cop.utils.StringUtils.noControlCodes
+
+open class Text(
+    string: String,
+    val font: Font,
+    colour: Colour,
+    constraints: Positions,
+    size: Constraint.Size
+) : Element(constraints, colour) {
+
+    protected var maxWidth: Constraint.Size? = null
+
+    init {
+        constraints.height = size
+        usingCtx = font.name == "Minecraft"
+    }
+
+    open var text: String = string
+        set(value) {
+            if (field == value) return
+            field = value
+            redraw()
+            previousHeight = 0f
+        }
+
+    protected var shadow: Boolean = false
+
+    protected var previousHeight = 0f
+
+    override fun prePosition() {
+
+        if (maxWidth != null) {
+
+            val limit = maxWidth!!.calculateSize(this, horizontal = true)
+            val w = getTextWidth()
+
+            if (w > limit && w > 0) {
+                val ratio = limit / w
+                val newH = height * ratio
+                constraints.height = newH.px
+
+                width = limit
+
+                previousHeight = newH
+            } else {
+                if (constraints.width.undefined()) width = w
+            }
+
+            return
+        }
+
+        if (previousHeight != height) {
+            previousHeight = height
+            if (constraints.width.undefined()) width = getTextWidth()
+        }
+    }
+
+    override fun draw() {
+        drawText(text, colour = colour!!.rgb)
+    }
+
+    protected fun drawText(string: String, x: Float = this.x, y: Float = this.y, colour: Int) {
+        if (font.name == "Minecraft" && !ui.nvgPass) {
+            val fontScale = height / mc.font.lineHeight
+            val string = string.replace(FORMATTING_CODE_PATTERN) { "§${it.value[1]}" }
+            withScale {
+                if (shadow) {
+                    val visual = Component.literal(string).visualOrderText
+                    val shadowSeq = FormattedCharSequence { sink ->
+                        visual.accept { index, style, codePoint ->
+                            val base = style.color?.value ?: colour
+                            val dark = TextColor.fromRgb(base.multiply(0.25f))
+                            sink.accept(index, style.withColor(dark), codePoint)
+                        }
+                    }
+                    ctx.drawText(shadowSeq, fontScale, fontScale, shadow = false, scale = fontScale)
+                }
+                ctx.drawText(string, 0, 0, colour, fontScale, false)
+            }
+        } else if (font.name != "Minecraft" && ui.nvgPass) {
+            if (shadow) {
+                val offset = height / 25f
+                NVGRenderer.formattedText(string, x + offset, y + offset, height, colour.multiply(0.25f), font)
+            }
+            NVGRenderer.formattedText(string, x, y, height, colour, font)
+        }
+    }
+
+    open fun getTextWidth(): Float = textWidth(text)
+
+    protected fun textWidth(string: String) =
+        if (font.name == "Minecraft") text.width(height / mc.font.lineHeight) else NVGRenderer.textWidth(string.noControlCodes, height, font)
+
+    companion object {
+        @AbobaDSL
+        var <E : Text> ElementScope<E>.string
+            get() = element.text
+            set(value) { element.text = value }
+
+        @AbobaDSL
+        var <E : Text> ElementScope<E>.shadow
+            get() = element.shadow
+            set(value) { element.shadow = value }
+
+        /**
+         * Subclass of [Text], where text is supplied from a function.
+         *
+         * NOTE: It should only be used if text changes really often.
+         */
+        @AbobaDSL
+        inline fun ElementScope<*>.textSupplied(
+            crossinline supplier: () -> Any?,
+            font: Font = NVGRenderer.defaultFont,
+            colour: Colour = Colour.WHITE,
+            pos: Positions = at(),
+            size: Constraint.Size = 50.percent
+        ): ElementScope<Text> = object : Text(supplier().toString(), font, colour, pos, size) {
+            override fun draw() {
+                text = supplier().toString()
+                super.draw()
+            }
+        }.scope { /* no-op */ }
+
+        @AbobaDSL
+        fun ElementScope<Text>.maxWidth(size: Constraint.Size) {
+            element.maxWidth = size
+        }
+    }
+}

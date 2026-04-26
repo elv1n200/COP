@@ -1,0 +1,64 @@
+package cop.api.skyblock.dungeon.odonscanning.tiles
+
+import cop.api.colour.Colour
+import cop.api.colour.multiply
+import cop.module.impl.dungeon.DungeonMap
+import cop.utils.Vec2i
+import cop.utils.equalsOneOf
+
+data class OdonDoor(val pos: Vec2i, var type: DoorType) {
+
+    var state: RoomState = RoomState.UNDISCOVERED
+    var locked = type.equalsOneOf(DoorType.WITHER, DoorType.BLOOD)
+
+    val size: Vec2i get() {
+        val xOffset = ((pos.x + 185) shr 4) % 2
+        val zOffset = ((pos.z + 185) shr 4) % 2
+        return Vec2i(
+            (xOffset xor 1) * 4 + xOffset * 4,
+            (zOffset xor 1) * 4 + zOffset * 4
+        )
+    }
+
+    val placement: Vec2i get() {
+        val x = (pos.x + 185) shr 4
+        val z = (pos.z + 185) shr 4
+        val xEven = x % 2
+        val zEven = z % 2
+        val thicknessOffset = (16 - 4) / 2
+        val xPos = (x shr 1) * 20 + xEven * 16 + (xEven xor 1) * thicknessOffset
+        val zPos = (z shr 1) * 20 + zEven * 16 + (zEven xor 1) * thicknessOffset
+        return Vec2i(xPos, zPos)
+    }
+
+
+    val colour: Colour get() {
+        val col = when (type) {
+            DoorType.BLOOD  -> DungeonMap.bloodDoor
+            DoorType.WITHER if (locked) -> DungeonMap.witherDoor
+            DoorType.ENTRANCE -> DungeonMap.entranceDoor
+            else -> DungeonMap.normalDoor
+        }
+
+        return if (state == RoomState.UNDISCOVERED) {
+            Colour.RGB(col.rgb.multiply(1f - DungeonMap.darkenMultiplier))
+        } else col
+    }
+
+    fun updateState(col: Int) {
+        if (col == 0) return
+
+        state = when (col) {
+            85, 119 -> RoomState.UNOPENED
+            else -> RoomState.DISCOVERED
+        }
+
+        when (col) {
+            18 -> type = DoorType.BLOOD
+            119 -> type = DoorType.WITHER
+            30 -> type = DoorType.ENTRANCE
+        }
+
+        locked = state == RoomState.UNOPENED && (type == DoorType.WITHER || type == DoorType.BLOOD)
+    }
+}

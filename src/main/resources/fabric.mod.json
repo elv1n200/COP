@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${mod_version}",
+  "name": "${mod_name}",
+  "description": "COP - merged endgame mod (Crack over Pussy)",
+  "authors": [
+    "elvin",
+    "(merged from: Hunchclient, NoammAddons, Quoi, Odin/OdinFabric)"
+  ],
+  "icon": "assets/cop/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "client": [
+      {
+        "adapter": "kotlin",
+        "value": "cop.CopMod"
+      }
+    ]
+  },
+  "mixins": [
+    "mixins.cop.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": ">=${fabric_api_version}",
+    "minecraft": "~${minecraft_version}",
+    "fabric-language-kotlin": ">=${fabric_kotlin_version}"
+  }
+}

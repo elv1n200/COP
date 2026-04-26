@@ -1,0 +1,103 @@
+package cop.module.impl.dungeon
+
+import cop.api.abobaui.elements.impl.Text.Companion.shadow
+import cop.api.abobaui.elements.impl.Text.Companion.textSupplied
+import cop.api.events.ChatEvent
+import cop.api.events.TickEvent
+import cop.api.events.WorldEvent
+import cop.api.skyblock.Island
+import cop.api.skyblock.dungeon.Dungeon.deathTick
+import cop.api.skyblock.dungeon.Dungeon.inBoss
+import cop.api.skyblock.invoke
+import cop.module.Module
+import cop.module.settings.UIComponent.Companion.visibleIf
+import cop.utils.StringUtils.toFixed
+import cop.utils.ThemeManager.theme
+import cop.utils.ui.hud.Hud
+
+object TickTimers : Module(
+    "Tick Timers",
+    desc = "Displays tick timers for floor seven boss fight.",
+    area = Island.Dungeon(7)
+) {
+    private val showInTicks by switch("Show in ticks")
+
+    private val padHud by textHud("Pad tick") {
+        visibleIf { padTick >= 0 }
+        textSupplied(
+            supplier = { formatTime(if (preview) 15 else padTick, 20) },
+            size = theme.textSize,
+            font = font,
+            colour = colour
+        ).shadow = shadow
+    }.setting()
+
+    private val goldorHud: Hud by textHud("Goldor death tick") {
+        visibleIf { goldorStart >= 0 || goldorTick >= 0 }
+        textSupplied(
+            supplier = { if (goldorStart >= 0 && startTimer) formatTime(goldorStart, 104) else formatTime(if (preview) 40 else goldorTick, 60) },
+            size = theme.textSize,
+            font = font,
+            colour = colour
+        ).shadow = shadow
+    }.setting()
+
+    private val startTimer by switch("Goldor start timer").visibleIf { goldorHud.enabled }
+
+    private val deathTickHud by textHud("Death tick") { // maybe make an option to show it before dung start only
+        visibleIf { deathTick >= 0 }
+        textSupplied(
+            supplier = { formatTime(if (preview) 15 else deathTick, 40) },
+            size = theme.textSize,
+            font = font,
+            colour = colour
+        ).shadow = shadow
+    }.setting()
+
+    private var goldorTick = -1
+    private var goldorStart = -1
+    private var padTick = -1
+
+    private val goldorRegex = Regex("^\\[BOSS] Goldor: Who dares trespass into my domain\\?$")
+    private val coreOpeningRegex = Regex("^The Core entrance is opening!$")
+    private val stormPadRegex = Regex("^\\[BOSS] Storm: Pathetic Maxor, just like expected\\.$")
+
+    init {
+        on<WorldEvent.Change> {
+            goldorTick = -1
+            goldorStart = -1
+            padTick = -1
+        }
+
+        on<TickEvent.Server> {
+            if (!inBoss) return@on
+            if (goldorTick == 0 && goldorStart <= 0 && goldorHud.enabled) goldorTick = 60
+            if (goldorTick >= 0 && goldorHud.enabled) goldorTick--
+            if (goldorStart >= 0 && goldorHud.enabled) goldorStart--
+            if (padTick == 0 && padHud.enabled) padTick = 20
+            if (padTick >= 0 && padHud.enabled) padTick--
+        }
+
+        on<ChatEvent.Packet> {
+            when {
+                goldorHud.enabled && message.matches(goldorRegex) -> goldorTick = 60
+                goldorHud.enabled && message.matches(coreOpeningRegex) -> {
+                    goldorStart = -1
+                    goldorTick = -1
+                }
+                padHud.enabled && message.matches(stormPadRegex) -> padTick = 20
+            }
+        }
+    }
+
+
+    private fun formatTime(time: Int, max: Int): String {
+        val col = when {
+            time.toFloat() >= max * 0.66 -> "§a"
+            time.toFloat() >= max * 0.33 -> "§6"
+            else -> "§c"
+        }
+        val display = if (showInTicks) "$time" else (time / 20f).toFixed()
+        return "$col$display"
+    }
+}
