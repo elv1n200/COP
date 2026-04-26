@@ -34,6 +34,10 @@ public class AbstractContainerScreenMixin {
 //        if (new GuiEvent.DrawBackground((Screen) (Object) this, context, mouseX, mouseY).post()) ci.cancel();
 //    }
 
+    // 1.21.11 added `mouseX` + `mouseY` int params to `renderSlot`. Same body
+    // either way — we don't actually need the new params because the event
+    // payload only carries the slot.
+    //? if <= 1.21.10 {
     @Inject(
             method = "renderSlot",
             at = @At("HEAD"),
@@ -42,6 +46,16 @@ public class AbstractContainerScreenMixin {
     private void cop$onDrawSlot(GuiGraphics context, Slot slot, CallbackInfo ci) {
         if (new GuiEvent.Slot.Draw((Screen) (Object) this, context, slot).post()) ci.cancel();
     }
+    //? } else {
+    /*@Inject(
+            method = "renderSlot",
+            at = @At("HEAD"),
+            cancellable = true
+    )
+    private void cop$onDrawSlot(GuiGraphics context, Slot slot, int mouseX, int mouseY, CallbackInfo ci) {
+        if (new GuiEvent.Slot.Draw((Screen) (Object) this, context, slot).post()) ci.cancel();
+    }
+    *///?}
 
     @Inject(
             method = "slotClicked",
