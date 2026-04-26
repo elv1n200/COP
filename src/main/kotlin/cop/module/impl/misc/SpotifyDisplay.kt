@@ -34,6 +34,8 @@ import cop.api.abobaui.elements.impl.Text.Companion.textSupplied
  *
  * See [SpotifyClient] for the helper-process plumbing and helper.ps1 for the
  * WinRT side.
+ *
+ * @author elvin
  */
 object SpotifyDisplay : Module(
     "Spotify Display",

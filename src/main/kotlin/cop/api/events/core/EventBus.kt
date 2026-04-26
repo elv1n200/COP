@@ -54,6 +54,8 @@ object EventBus { // todo cleanup
      * allocation per tick/frame/packet, with no module in the project actually
      * using a non-zero priority. Caching the sorted list moves the work to the
      * (rare) add/remove path and turns dispatch into a single volatile read.
+     *
+     * @author elvin
      */
     class EventHandlers {
         private val live = ConcurrentHashMap.newKeySet<PrioritisedCallback<*>>()

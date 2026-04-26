@@ -3,11 +3,15 @@
   "id": "${mod_id}",
   "version": "${mod_version}",
   "name": "${mod_name}",
-  "description": "COP - merged endgame mod (Crack over Pussy)",
+  "description": "Hypixel Skyblock endgame mod for Fabric.",
   "authors": [
-    "elvin",
-    "(merged from: Hunchclient, NoammAddons, Quoi, Odin/OdinFabric)"
+    "elvin"
   ],
+  "contact": {
+    "homepage": "https://github.com/elv1n200/COP",
+    "sources": "https://github.com/elv1n200/COP",
+    "issues": "https://github.com/elv1n200/COP/issues"
+  },
   "icon": "assets/cop/icon.png",
   "environment": "*",
   "entrypoints": {

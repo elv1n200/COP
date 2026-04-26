@@ -1,4 +1,6 @@
 # cop spotify helper — talks to Windows SMTC via WinRT, emits JSON lines on stdout.
+# Author: elvin
+#
 # Output format: line-delimited JSON.
 #   {"type":"state", title, artist, album, posMs, durMs, paused, open, source, artVersion}
 #   {"type":"art", version, b64} (only when album art changes)

@@ -31,6 +31,8 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * macOS / Linux equivalents (MPRIS / AppleScript) are not implemented — Spotify
  * desktop only really exists on Windows for our user base.
+ *
+ * @author elvin
  */
 object SpotifyClient {
 

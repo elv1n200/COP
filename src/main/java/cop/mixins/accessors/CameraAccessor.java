@@ -10,6 +10,8 @@ import org.spongepowered.asm.mixin.gen.Accessor;
  * 1.21.11 and Mojang did *not* add a `getPosition()` getter — code accessing
  * the camera position from outside has to go through a mixin accessor on both
  * versions, so we route everything through this interface for source parity.
+ *
+ * @author elvin
  */
 @Mixin(Camera.class)
 public interface CameraAccessor {
