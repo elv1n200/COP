@@ -114,6 +114,10 @@ public abstract class ChatComponentMixin implements IChatComponent {
         }
     }
 
+    // 1.21.11 added a second boolean param to `render`, so the implicit
+    // discriminator can no longer pick "the boolean" — pin to ordinal = 0
+    // (the first boolean = `focused`) on the new version.
+    //? if <= 1.21.10 {
     @ModifyVariable(
             method = "render",
             at = @At("HEAD"),
@@ -122,6 +126,17 @@ public abstract class ChatComponentMixin implements IChatComponent {
     private boolean renderFocused(boolean focused) {
         return focused || Chat.INSTANCE.isDown();
     }
+    //? } else {
+    /*@ModifyVariable(
+            method = "render",
+            at = @At("HEAD"),
+            argsOnly = true,
+            ordinal = 0
+    )
+    private boolean renderFocused(boolean focused) {
+        return focused || Chat.INSTANCE.isDown();
+    }
+    *///?}
 
     @ModifyExpressionValue(
             method = {"getHeight()I", "addMessageToDisplayQueue"},
