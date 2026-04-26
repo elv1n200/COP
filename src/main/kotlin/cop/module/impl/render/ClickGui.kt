@@ -74,7 +74,7 @@ object ClickGui : Module(
     }.open()
 
     val seedColour by colourPicker("Colour", Colour.RGB(255, 204, 134)).json("Theme seed").childOf(::selectedTheme).asParent()
-    val moduleSorting by selector("Module sorting", ModuleSorting.Alphabetical).childOf(::selectedTheme).onValueChanged { _, _ -> reopen() }
+    val moduleSorting by selector("Module sorting", ModuleSorting.Default).childOf(::selectedTheme).onValueChanged { _, _ -> reopen() }
 
     var rainbowSpeed by slider("Rainbow colour speed", 1.0f, 0.05f, 5.0f, 0.05f)
     
@@ -438,6 +438,13 @@ object ClickGui : Module(
     enum class ModuleSorting(
         val comparator: Comparator<Module>
     ) {
+        // Preserves the order modules are registered in `ModuleManager`, which
+        // groups them by purpose (visuals → HUD info → solvers → QoL → cheaty
+        // automation) instead of mixing helpers and bots randomly.
+        Default(
+            compareBy { modules.indexOf(it) }
+        ),
+
         WidthDescending(
             compareByDescending<Module> { NVGRenderer.textWidth(it.name, 18f, defaultFont) }.thenBy { it.name.lowercase() }
         ),

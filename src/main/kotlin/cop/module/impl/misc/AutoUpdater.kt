@@ -17,6 +17,7 @@ import moe.nea.libautoupdate.UpdateContext
 import moe.nea.libautoupdate.UpdateData
 import moe.nea.libautoupdate.UpdateTarget
 import net.fabricmc.loader.api.FabricLoader
+import net.minecraft.client.Minecraft
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Style
 import java.net.URI
@@ -50,10 +51,15 @@ object AutoUpdater : Module(
         "Check on launch", true,
         desc = "Hits the GitHub API once when the module enables.",
     )
+    private val showPopup by switch(
+        "Show popup screen", true,
+        desc = "Open a modal screen with Update / Remind / Skip buttons when an update is detected. " +
+                "When off, the module only writes a chat notification with the release link.",
+    )
     private val autoDownload by switch(
         "Auto download", false,
-        desc = "Download new versions automatically and install them on the next Minecraft restart. " +
-                "When off, the module only sends a chat notification with the release link.",
+        desc = "Skip the popup and download new versions immediately, installing them on the next " +
+                "Minecraft restart.",
     )
     private val includePrereleases by switch(
         "Include pre-releases", false,
@@ -72,8 +78,21 @@ object AutoUpdater : Module(
         desc = "Trigger an update check manually.",
     ).onPress { runCheck(reason = "manual") }.also { register(it) }
 
+    /**
+     * Persisted in `cop-config.json` as part of the module's settings, hidden
+     * from the ClickGui — stores the version tag the user chose to permanently
+     * skip via the popup screen. The popup re-appears once the latest tag on
+     * GitHub is *different* from this value (i.e. another release came out).
+     */
+    private var skippedVersion by textInput(
+        "(internal) skipped version", "",
+        desc = "Set automatically by the update popup's Skip button.",
+    ).hide()
+
     // ---------------------------------------------------------------- runtime
     private val checkInFlight = AtomicBoolean(false)
+    /** "Remind me later" — transient suppression for the rest of this session. */
+    @Volatile private var remindLaterFor: String? = null
 
     /** Bare mod version reported in `fabric.mod.json` — e.g. `1.0.0`. */
     private val currentModVersion: String by lazy {
@@ -142,29 +161,70 @@ object AutoUpdater : Module(
     private fun handleUpdateAvailable(update: PotentialUpdate) {
         val data = update.update
         val versionLabel = data.versionName ?: "?"
-        val releaseUrl = (data as? GithubReleaseUpdateData)?.htmlUrl
+
+        // Suppression checks: "skip" persists across sessions, "remind later"
+        // only for this session.
+        if (versionLabel == skippedVersion) {
+            CopMod.logger.info("[AutoUpdater] update $versionLabel skipped via persistent setting")
+            return
+        }
+        if (versionLabel == remindLaterFor) return
 
         if (autoDownload) {
-            CopMod.logger.info("[AutoUpdater] downloading update $versionLabel")
-            update.launchUpdate().whenComplete { _, err ->
-                if (err == null) {
-                    modMessage("&aAuto Updater: downloaded &f$versionLabel&a — installs on next Minecraft restart.")
-                } else {
-                    CopMod.logger.warn("[AutoUpdater] download failed", err)
-                    modMessage("&cAuto Updater: download failed — ${err.message ?: "unknown error"}")
-                }
+            beginDownload(update, versionLabel)
+            return
+        }
+
+        if (showPopup) {
+            // Switch to the render thread before opening a Screen — Mojang's
+            // setScreen isn't safe off-thread.
+            Minecraft.getInstance().execute {
+                val mc = Minecraft.getInstance()
+                val parent = mc.screen
+                mc.setScreen(
+                    UpdateScreen(
+                        parent = parent,
+                        currentVersion = currentModVersion,
+                        newVersion = versionLabel,
+                        onUpdate = { beginDownload(update, versionLabel) },
+                        onRemind = {
+                            remindLaterFor = versionLabel
+                            modMessage("&eAuto Updater: will remind on next launch.")
+                        },
+                        onSkip = {
+                            skippedVersion = versionLabel
+                            modMessage("&eAuto Updater: skipped &f$versionLabel&e (won't ask again until a newer release).")
+                        },
+                    )
+                )
             }
         } else {
-            // Notification-only path. Make the version label a clickable link to
-            // the GitHub release page so the user can grab the jar by hand.
-            val link = ChatUtils.literal("&b&n$versionLabel&r&a")
-                .also { c ->
-                    if (releaseUrl != null) {
-                        c.style = Style.EMPTY.withClickEvent(ClickEvent.OpenUrl(URI.create(releaseUrl)))
-                    }
+            chatNotify(update, versionLabel)
+        }
+    }
+
+    private fun chatNotify(update: PotentialUpdate, versionLabel: String) {
+        val releaseUrl = (update.update as? GithubReleaseUpdateData)?.htmlUrl
+        val link = ChatUtils.literal("&b&n$versionLabel&r&a")
+            .also { c ->
+                if (releaseUrl != null) {
+                    c.style = Style.EMPTY.withClickEvent(ClickEvent.OpenUrl(URI.create(releaseUrl)))
                 }
-            val msg = ChatUtils.literal("&aAuto Updater: ").append(link).append(ChatUtils.literal("&a available"))
-            ChatUtils.modMessage(msg)
+            }
+        val msg = ChatUtils.literal("&aAuto Updater: ").append(link).append(ChatUtils.literal("&a available"))
+        ChatUtils.modMessage(msg)
+    }
+
+    private fun beginDownload(update: PotentialUpdate, versionLabel: String) {
+        CopMod.logger.info("[AutoUpdater] downloading update $versionLabel")
+        modMessage("&eAuto Updater: downloading &f$versionLabel&e…")
+        update.launchUpdate().whenComplete { _, err ->
+            if (err == null) {
+                modMessage("&aAuto Updater: downloaded &f$versionLabel&a — installs on next Minecraft restart.")
+            } else {
+                CopMod.logger.warn("[AutoUpdater] download failed", err)
+                modMessage("&cAuto Updater: download failed — ${err.message ?: "unknown error"}")
+            }
         }
     }
 

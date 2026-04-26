@@ -89,6 +89,7 @@ object ModuleManager {
             MirrorverseSolvers,
             CatMode,
             SpotifyDisplay,
+            AutoUpdater,
 
             // PLAYER
             AutoSprint,

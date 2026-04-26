@@ -60,6 +60,9 @@ base.archivesName.set(property("archives_base_name") as String)
 repositories {
     mavenCentral()
     maven("https://pkgs.dev.azure.com/djtheredstoner/DevAuth/_packaging/public/maven/v1")
+    // libautoupdate (used by AutoUpdater module). Same maven the Skyblocker /
+    // Nebulune / Athen autoupdater integrations pull from.
+    maven("https://repo.nea.moe/releases")
 }
 
 dependencies {
@@ -70,6 +73,11 @@ dependencies {
     modImplementation("net.fabricmc:fabric-language-kotlin:${mcInfo.fabricKotlin}")
     modImplementation("net.fabricmc.fabric-api:fabric-api:${mcInfo.fabricApi}")
     modRuntimeOnly("me.djtheredstoner:DevAuth-fabric:1.2.1")
+
+    // Self-update against GitHub releases. `include(...)` bundles it inside the
+    // mod jar so end users don't have to install a second mod.
+    modImplementation("moe.nea:libautoupdate:1.3.1")
+    include("moe.nea:libautoupdate:1.3.1")
 
     modImplementation("io.github.classgraph:classgraph:4.8.184")
     include("io.github.classgraph:classgraph:4.8.184")
