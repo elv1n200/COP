@@ -13,6 +13,8 @@ import net.minecraft.client.gui.render.pip.PictureInPictureRenderer
 import net.minecraft.client.gui.render.state.pip.PictureInPictureRenderState
 import net.minecraft.client.renderer.MultiBufferSource
 import org.joml.Matrix3x2f
+//? if >= 1.21.11
+//import org.lwjgl.opengl.GL33.*
 
 /**
  * from OdinFabric (BSD 3-Clause)
@@ -24,16 +26,26 @@ class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
 
     override fun renderToTexture(state: NVGRenderState, poseStack: PoseStack) {
         val colorTex = RenderSystem.outputColorTextureOverride
-
         val bufferManager = (RenderSystem.getDevice() as? GlDevice)?.directStateAccess() ?: return
         val glDepthTex = (RenderSystem.outputDepthTextureOverride?.texture() as? GlTexture) ?: return
 
-        (colorTex?.texture() as? GlTexture)?.getFbo(bufferManager, glDepthTex)?.apply {
+        val width = colorTex?.getWidth(0) ?: return
+        val height = colorTex.getHeight(0)
+        (colorTex.texture() as? GlTexture)?.getFbo(bufferManager, glDepthTex)?.apply {
             GlStateManager._glBindFramebuffer(GlConst.GL_FRAMEBUFFER, this)
-            GlStateManager._viewport(0, 0, colorTex.getWidth(0), colorTex.getHeight(0))
+            GlStateManager._viewport(0, 0, width, height)
         }
 
-        NVGRenderer.beginFrame(mc.window.width.toFloat(), mc.window.height.toFloat())
+        // 1.21.11's RenderPipeline binds a GL sampler on unit 0 that overrides
+        // the texture-object sampler state NVG sets per-glyph — without this,
+        // text glyphs render as solid white blocks. Save+null+restore the
+        // sampler around NVG's draw to keep both pipelines happy.
+        //? if >= 1.21.11 {
+        /*val prevSampler = glGetInteger(GL_SAMPLER_BINDING)
+        glBindSampler(0, 0)
+        *///? }
+
+        NVGRenderer.beginFrame(width.toFloat(), height.toFloat())
         state.renderContent()
         NVGRenderer.endFrame()
 
@@ -41,6 +53,10 @@ class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
         GlStateManager._disableCull()
         GlStateManager._enableBlend()
         GlStateManager._blendFuncSeparate(770, 771, 1, 0)
+
+        //? if >= 1.21.11 {
+        /*glBindSampler(0, prevSampler)
+        *///? }
     }
 
     override fun getTranslateY(height: Int, windowScaleFactor: Int): Float = height / 2f
