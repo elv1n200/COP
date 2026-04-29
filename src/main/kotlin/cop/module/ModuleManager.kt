@@ -66,6 +66,7 @@ object ModuleManager {
 
             // --- Macros / heavy automation ("cheaty" stuff) -----------
             TerminalAura,
+            AutoTerms,
             SecretTriggerBot,
             SecretAura,
             DungeonBreaker,
@@ -89,6 +90,7 @@ object ModuleManager {
             MirrorverseSolvers,
             CatMode,
             SpotifyDisplay,
+            LobbyMarker,
             AutoUpdater,
 
             // PLAYER
