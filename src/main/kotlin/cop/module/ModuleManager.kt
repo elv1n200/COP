@@ -53,6 +53,7 @@ object ModuleManager {
             ArrowAlign,
             SecretRoutes,
             BonzoStaffHelper,
+            TerminalWaypoints,
 
             // --- QoL / mild automation --------------------------------
             LeapMenu,
