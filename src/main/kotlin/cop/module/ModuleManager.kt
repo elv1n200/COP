@@ -81,6 +81,7 @@ object ModuleManager {
             Test,
             Chat,
             ChatReplacements, // todo remove/replace
+            VisualWords,
             PetKeybinds,
             WardrobeKeybinds,
             AntiNick,
@@ -102,6 +103,7 @@ object ModuleManager {
             SnapTap,
             EtherwarpHelper,
             FishingHelper,
+            AutoSoulcry,
 
             // RENDER
             NameTags,
