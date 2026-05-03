@@ -82,6 +82,7 @@ object ModuleManager {
             Chat,
             ChatReplacements, // todo remove/replace
             VisualWords,
+            ItemQuality,
             PetKeybinds,
             WardrobeKeybinds,
             AntiNick,
@@ -99,6 +100,7 @@ object ModuleManager {
             AutoSprint,
             PlayerDisplay,
             Tweaks,
+            CameraHelper,
             LagDetector,
             SnapTap,
             EtherwarpHelper,

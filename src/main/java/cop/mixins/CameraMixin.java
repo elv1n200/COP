@@ -1,5 +1,6 @@
 package cop.mixins;
 
+import cop.module.impl.player.CameraHelper;
 import cop.module.impl.player.Tweaks;
 import net.minecraft.client.Camera;
 import net.minecraft.world.entity.Entity;
@@ -10,7 +11,9 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import static cop.module.impl.render.RenderOptimiser.should;
 
@@ -49,5 +52,24 @@ public class CameraMixin {
             }
         }
         this.eyeHeight = value;
+    }
+
+    /**
+     * Short-circuits {@code Camera.getMaxZoom} for the CameraHelper module:
+     *  - "Custom distance" returns the user's configured distance
+     *  - "Camera clip" returns the requested {@code startingDistance} as-is
+     *    (skipping the wall-raycast that normally pushes the camera back).
+     *  Custom distance wins over clip when both are enabled.
+     */
+    @Inject(method = "getMaxZoom", at = @At("HEAD"), cancellable = true)
+    private void cop$cameraHelperZoom(float startingDistance, CallbackInfoReturnable<Float> cir) {
+        if (!CameraHelper.INSTANCE.getEnabled()) return;
+        if (CameraHelper.getUseCustomDistance()) {
+            cir.setReturnValue(CameraHelper.getCustomDistance());
+            return;
+        }
+        if (CameraHelper.getNoClip()) {
+            cir.setReturnValue(startingDistance);
+        }
     }
 }
