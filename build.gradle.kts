@@ -43,6 +43,15 @@ val versionMatrix = mapOf(
         fabricKotlin  = "1.13.7+kotlin.2.2.21",
         fabricApi     = "0.140.2+1.21.11",
     ),
+    // Mojang's new date-based scheme. 26.1.2 sits *above* 1.21.11 in Stonecutter's
+    // version comparison, so every `>= 1.21.11` source branch + replacement also
+    // applies here; any 26.x-only breakage gets its own `>= 26.1` guards.
+    "26.1.2" to McVersionInfo(
+        minecraft     = "26.1.2",
+        loader        = "0.19.2",
+        fabricKotlin  = "1.13.9+kotlin.2.3.10",
+        fabricApi     = "0.145.3+26.1.1",
+    ),
 )
 
 val mcVersion: String = stonecutter.current.version
@@ -141,14 +150,16 @@ tasks {
 
     compileKotlin {
         compilerOptions {
-            jvmTarget = JvmTarget.JVM_21
+            // MC 26.x is Java-25 bytecode; 1.21.x stays on 21.
+            jvmTarget = if (mcVersion.startsWith("26")) JvmTarget.JVM_25 else JvmTarget.JVM_21
             freeCompilerArgs.add("-Xlambdas=class")
         }
     }
 
     compileJava {
-        sourceCompatibility = "21"
-        targetCompatibility = "21"
+        val rel = if (mcVersion.startsWith("26")) "25" else "21"
+        sourceCompatibility = rel
+        targetCompatibility = rel
         options.encoding = "UTF-8"
         options.compilerArgs.addAll(listOf("-Xlint:deprecation", "-Xlint:unchecked"))
     }
@@ -168,4 +179,10 @@ tasks {
 
 java {
     withSourcesJar()
+    // Loom decompiles MC under this toolchain — 26.x mandates JDK 25.
+    toolchain {
+        languageVersion.set(
+            JavaLanguageVersion.of(if (mcVersion.startsWith("26")) 25 else 21)
+        )
+    }
 }

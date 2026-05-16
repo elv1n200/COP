@@ -27,7 +27,9 @@ rootProject.name = "cop"
 
 stonecutter {
     create(rootProject) {
-        versions("1.21.10", "1.21.11")
-        vcsVersion = "1.21.10"  // The "canonical" branch — used for IDE source attachment.
+        // mc26 branch builds *only* 26.1.2 — the 1.21.x targets stay on `main`
+        // with the Kotlin-2.2 / Java-21 toolchain.
+        versions("26.1.2")
+        vcsVersion = "26.1.2"
     }
 }
