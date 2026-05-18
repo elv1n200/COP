@@ -113,10 +113,31 @@ private fun setLineWidthIfSupported(width: Float) {
     //?}
 }
 
+// 26.x reworked Fabric's world-render context: WorldRenderContext.matrices()
+// /consumers() became LevelRenderContext.poseStack()/bufferSource(). The
+// receiver type itself is swapped by the Stonecutter `WorldRenderContext` ->
+// `LevelRenderContext` replacement; these compat shims isolate the method
+// rename to one place each.
+private fun WorldRenderContext.poseStackCompat(): PoseStack? {
+    //? if >= 26 {
+    /*return poseStack()*/
+    //? } else {
+    return matrices()
+    //? }
+}
+
+private fun WorldRenderContext.bufferSourceCompat(): MultiBufferSource.BufferSource? {
+    //? if >= 26 {
+    /*return bufferSource() as? MultiBufferSource.BufferSource*/
+    //? } else {
+    return consumers() as? MultiBufferSource.BufferSource
+    //? }
+}
+
 fun WorldRenderContext.drawLine(points: Collection<Vec3>, colour: Colour, depth: Boolean, thickness: Float = 3f) {
     if (points.size < 2) return
-    val matrix = matrices() ?: return
-    val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
+    val matrix = poseStackCompat() ?: return
+    val bufferSource = bufferSourceCompat() ?: return
     val layer = if (depth) CustomRenderLayer.LINE_LIST else CustomRenderLayer.LINE_LIST_ESP
     setLineWidthIfSupported(thickness)
 
@@ -146,8 +167,8 @@ fun WorldRenderContext.drawTracer(to: Vec3, colour: Colour, thickness: Float = 6
 }
 
 fun WorldRenderContext.drawWireFrameBox(aabb: AABB, colour: Colour, thickness: Float = 6f, depth: Boolean = false) {
-    val matrix = matrices() ?: return
-    val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
+    val matrix = poseStackCompat() ?: return
+    val bufferSource = bufferSourceCompat() ?: return
     val layer = if (depth) CustomRenderLayer.LINE_LIST else CustomRenderLayer.LINE_LIST_ESP
     val camera = camera() ?: return
     val width = (thickness / camera.pos.distanceToSqr(aabb.center).pow(0.15)).toFloat()
@@ -161,8 +182,8 @@ fun WorldRenderContext.drawWireFrameBox(aabb: AABB, colour: Colour, thickness: F
 }
 
 fun WorldRenderContext.drawFilledBox(box: AABB, colour: Colour, depth: Boolean = false) {
-    val matrix = matrices() ?: return
-    val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
+    val matrix = poseStackCompat() ?: return
+    val bufferSource = bufferSourceCompat() ?: return
     val layer = if (depth) CustomRenderLayer.TRIANGLE_STRIP else CustomRenderLayer.TRIANGLE_STRIP_ESP
 
     matrix.pushPose()
@@ -183,8 +204,8 @@ fun WorldRenderContext.drawStyledBox(style: String, box: AABB, colour: Colour, f
 }
 
 //fun WorldRenderContext.drawBeaconBeam(position: BlockPos, colour: Colour) {
-//    val matrix = matrices() ?: return
-//    val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
+//    val matrix = poseStackCompat() ?: return
+//    val bufferSource = bufferSourceCompat() ?: return
 //    val camera = camera()?.position ?: return
 //
 //    matrix.pushPose()
@@ -200,7 +221,7 @@ fun WorldRenderContext.drawStyledBox(style: String, box: AABB, colour: Colour, f
 //}
 
 fun WorldRenderContext.drawText(text: Component, pos: Vec3, colour: Colour = Colour.TRANSPARENT, shadow: Boolean = true, scale: Float = 0.5f, depth: Boolean = false) {
-    val stack = matrices() ?: return
+    val stack = poseStackCompat() ?: return
 
     stack.pushPose()
     val matrix = stack.last().pose()
@@ -232,8 +253,8 @@ fun WorldRenderContext.drawCylinder(
     thickness: Float = 5f,
     depth: Boolean = false
 ) {
-    val matrix = matrices() ?: return
-    val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
+    val matrix = poseStackCompat() ?: return
+    val bufferSource = bufferSourceCompat() ?: return
     val layer = if (depth) CustomRenderLayer.LINE_LIST else CustomRenderLayer.LINE_LIST_ESP
     val camera = camera()?.pos ?: return
 

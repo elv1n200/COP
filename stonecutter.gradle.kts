@@ -48,6 +48,15 @@ stonecutter parameters {
             replace("net.minecraft.client.gui.GuiGraphics", "net.minecraft.client.gui.GuiGraphicsExtractor")
             replace("GuiGraphics", "GuiGraphicsExtractor")
             replace("net.minecraft.client.GuiMessage", "net.minecraft.client.multiplayer.chat.GuiMessage")
+            // Fabric reworked the world-render API: WorldRenderContext
+            // (...rendering.v1.world) -> LevelRenderContext (...v1.level).
+            // FQ import first, then the bare type — order matters so the
+            // bare rule doesn't corrupt the (already-rewritten) import path.
+            replace(
+                "net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext",
+                "net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext",
+            )
+            replace("WorldRenderContext", "LevelRenderContext")
         }
     }
 }
