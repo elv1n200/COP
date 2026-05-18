@@ -1,7 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    id("fabric-loom")
+    // mc26: non-obfuscated loom plugin (no remap, no mappings config).
+    id("net.fabricmc.fabric-loom")
     kotlin("jvm")
     `maven-publish`
 }
@@ -50,7 +51,7 @@ val versionMatrix = mapOf(
         minecraft     = "26.1.2",
         loader        = "0.19.2",
         fabricKotlin  = "1.13.9+kotlin.2.3.10",
-        fabricApi     = "0.145.3+26.1.1",
+        fabricApi     = "0.149.0+26.1.2",
     ),
 )
 
@@ -74,29 +75,34 @@ repositories {
     maven("https://repo.nea.moe/releases")
 }
 
+// mc26 branch: unobfuscated MC only. Mojang ships readable names in the jar,
+// the LoomNoRemapGradlePlugin does NO remapping — so there is no `minecraft`
+// remap, no `mappings(...)` config (the no-remap plugin doesn't even define
+// that configuration), and mods are plain `implementation`/`runtimeOnly`
+// rather than `modImplementation`/`modRuntimeOnly` (those would re-enable the
+// remap machinery). The obfuscated 1.21.x wiring lives on `main`.
 dependencies {
     minecraft("com.mojang:minecraft:${mcInfo.minecraft}")
-    mappings(loom.officialMojangMappings())
 
-    modImplementation("net.fabricmc:fabric-loader:${mcInfo.loader}")
-    modImplementation("net.fabricmc:fabric-language-kotlin:${mcInfo.fabricKotlin}")
-    modImplementation("net.fabricmc.fabric-api:fabric-api:${mcInfo.fabricApi}")
-    modRuntimeOnly("me.djtheredstoner:DevAuth-fabric:1.2.1")
+    implementation("net.fabricmc:fabric-loader:${mcInfo.loader}")
+    implementation("net.fabricmc:fabric-language-kotlin:${mcInfo.fabricKotlin}")
+    implementation("net.fabricmc.fabric-api:fabric-api:${mcInfo.fabricApi}")
+    runtimeOnly("me.djtheredstoner:DevAuth-fabric:1.2.1")
 
     // Self-update against GitHub releases. `include(...)` bundles it inside the
     // mod jar so end users don't have to install a second mod.
-    modImplementation("moe.nea:libautoupdate:1.3.1")
+    implementation("moe.nea:libautoupdate:1.3.1")
     include("moe.nea:libautoupdate:1.3.1")
 
-    modImplementation("io.github.classgraph:classgraph:4.8.184")
+    implementation("io.github.classgraph:classgraph:4.8.184")
     include("io.github.classgraph:classgraph:4.8.184")
 
     property("minecraft_lwjgl_version").let {
-        modImplementation("org.lwjgl:lwjgl-nanovg:$it")
+        implementation("org.lwjgl:lwjgl-nanovg:$it")
         include("org.lwjgl:lwjgl-nanovg:$it")
 
         listOf("windows", "linux", "macos", "macos-arm64").forEach { v ->
-            modImplementation("org.lwjgl:lwjgl-nanovg:$it:natives-$v")
+            implementation("org.lwjgl:lwjgl-nanovg:$it:natives-$v")
             include("org.lwjgl:lwjgl-nanovg:$it:natives-$v")
         }
     }

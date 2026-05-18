@@ -11,7 +11,11 @@ pluginManagement {
     val kotlin_version: String by settings
 
     plugins {
-        id("fabric-loom") version loom_version
+        // mc26: `net.fabricmc.fabric-loom` = LoomNoRemapGradlePlugin (the
+        // non-obfuscated path, no `mappings` config). The short `fabric-loom`
+        // id maps to the legacy remap plugin which demands mappings — wrong
+        // for unobfuscated 26.x. `main` keeps the short id for obf 1.21.x.
+        id("net.fabricmc.fabric-loom") version loom_version
         kotlin("jvm") version kotlin_version
     }
 }
