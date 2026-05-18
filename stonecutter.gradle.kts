@@ -63,6 +63,11 @@ stonecutter parameters {
             replace("net.minecraft.world.inventory.ClickType", "net.minecraft.world.inventory.ContainerInput")
             replace("ClickType", "ContainerInput")
             replace("handleInventoryMouseClick", "handleContainerInput")
+            // GuiGraphicsExtractor.drawString(...) -> text(...) (same params).
+            replace("drawString", "text")
+            // Fabric command facade renamed (same package, same literal/
+            // argument statics): ClientCommandManager -> ClientCommands.
+            replace("ClientCommandManager", "ClientCommands")
         }
     }
 }
