@@ -7,6 +7,12 @@
 
 plugins {
     id("dev.kikugie.stonecutter")
+    // Declaring loom at the controller level (apply false) is what lets
+    // Stonecutter 0.9 wire source-preprocessing into each versioned
+    // subproject. Without this the raw src/ is compiled and no `replace(...)`
+    // / `//?` directives are applied. Version comes from settings
+    // pluginManagement. mc26 uses the no-remap (unobfuscated) loom plugin.
+    id("net.fabricmc.fabric-loom") apply false
 }
 
 stonecutter active "26.1.2"
@@ -31,6 +37,17 @@ stonecutter parameters {
             replace("net.minecraft.world.entity.monster.Zombie",                "net.minecraft.world.entity.monster.zombie.Zombie")
             replace("net.minecraft.world.entity.projectile.AbstractArrow",      "net.minecraft.world.entity.projectile.arrow.AbstractArrow")
             replace("net.minecraft.client.renderer.RenderType",                 "net.minecraft.client.renderer.rendertype.RenderType")
+        }
+
+        // 26.x (unobfuscated, Mojang's real names) renamed/moved further on top
+        // of the 1.21.11 changes. These carry the 1.21.11 block above (26 > 1.21)
+        // plus 26-only renames. `GuiGraphics` -> `GuiGraphicsExtractor` is a
+        // straight class rename so the bare-token replace is safe (source never
+        // mentions GuiGraphicsExtractor itself).
+        string(current.parsed >= "26") {
+            replace("net.minecraft.client.gui.GuiGraphics", "net.minecraft.client.gui.GuiGraphicsExtractor")
+            replace("GuiGraphics", "GuiGraphicsExtractor")
+            replace("net.minecraft.client.GuiMessage", "net.minecraft.client.multiplayer.chat.GuiMessage")
         }
     }
 }

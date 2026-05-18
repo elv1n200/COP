@@ -24,7 +24,10 @@ plugins {
     // Source-preprocessing multi-version plugin. Versioned subprojects share
     // the same `src/` tree, with per-version code branches expressed as
     // `//? if mc >= "1.21.11" { ... } else { ... }` comments.
-    id("dev.kikugie.stonecutter") version "0.8"
+    // mc26: 0.9.x supports loom 1.16 / the no-remap (unobfuscated) plugin.
+    // 0.8 didn't hook source-preprocessing for it (raw src compiled, no
+    // replacements applied). main can stay on 0.8 for the obf 1.21.x builds.
+    id("dev.kikugie.stonecutter") version "0.9.4"
 }
 
 rootProject.name = "cop"
