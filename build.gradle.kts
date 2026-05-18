@@ -171,15 +171,41 @@ tasks {
     }
 
     // Per-version "build + collect into dist/" task. Stonecutter aggregates
-    // these across all subprojects via `chiseledBuildAndCollect`.
+    // these across all subprojects.
     register<Copy>("buildAndCollect") {
         group = "build"
         description = "Builds this MC version and copies its jar into dist/."
-        // remapJar is loom's RemapJarTask, not org.gradle.api.tasks.bundling.Jar —
-        // pass the named provider untyped and let `from` introspect its outputs.
-        from(named("remapJar"))
+        // Obfuscated loom produces `remapJar`; the no-remap (unobfuscated 26.x)
+        // plugin has no remap step so the artifact is the plain `jar`. Pick
+        // whichever exists — referencing a missing task fails configuration
+        // and cascades (Stonecutter wiring breaks too).
+        val jarTaskName = if (project.tasks.findByName("remapJar") != null) "remapJar" else "jar"
+        from(project.tasks.named(jarTaskName))
         into(rootProject.rootDir.resolve("dist"))
         dependsOn("build")
+    }
+}
+
+// mc26: Stonecutter 0.9 + the no-remap loom plugin doesn't auto-redirect the
+// subproject's source set onto the preprocessed output (verified: stonecutter-
+// Generate produces correct sources under build/generated/stonecutter/main but
+// compileKotlin still reads raw src/). Wire it explicitly and order the compile
+// tasks after generation.
+if (mcVersion.startsWith("26")) {
+    val genMain = layout.buildDirectory.dir("generated/stonecutter/main")
+    sourceSets.named("main") {
+        java.setSrcDirs(listOf(genMain.map { it.dir("java") }))
+        resources.setSrcDirs(listOf(genMain.map { it.dir("resources") }))
+    }
+    // Kotlin keeps its own source-dir list; point it at the generated kotlin
+    // (+ java, for mixed sources) tree.
+    extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension>("kotlin") {
+        sourceSets.named("main") {
+            kotlin.setSrcDirs(listOf(genMain.map { it.dir("kotlin") }, genMain.map { it.dir("java") }))
+        }
+    }
+    listOf("compileKotlin", "compileJava", "processResources").forEach { t ->
+        tasks.named(t) { dependsOn("stonecutterGenerate") }
     }
 }
 
