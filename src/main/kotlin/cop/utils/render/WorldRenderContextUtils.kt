@@ -11,6 +11,7 @@ import com.mojang.blaze3d.vertex.PoseStack
 import com.mojang.blaze3d.vertex.VertexConsumer
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext
 import net.minecraft.client.gui.Font
+//? if <= 1.21.11
 import net.minecraft.client.renderer.LightTexture
 import net.minecraft.client.renderer.MultiBufferSource
 import net.minecraft.network.chat.Component
@@ -233,10 +234,18 @@ fun WorldRenderContext.drawText(text: Component, pos: Vec3, colour: Colour = Col
     val consumers = MultiBufferSource.immediate(ALLOCATOR)
 
     mc.font?.let {
+        // LightTexture was renamed to Lightmap in 26.x and FULL_BRIGHT no
+        // longer lives there; the value is the stable packed lightmap
+        // constant 0xF000F0 (full block + sky light).
+        //? if >= 26 {
+        /*val fullBright = 0xF000F0
+        *///? } else {
+        val fullBright = LightTexture.FULL_BRIGHT
+        //? }
         it.drawInBatch(
             text, -it.width(text) / 2f, 0f, -1, shadow, matrix, consumers,
             if (depth) Font.DisplayMode.NORMAL else Font.DisplayMode.SEE_THROUGH,
-            colour.rgb, LightTexture.FULL_BRIGHT
+            colour.rgb, fullBright
         )
     }
 

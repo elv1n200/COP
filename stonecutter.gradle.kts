@@ -57,6 +57,12 @@ stonecutter parameters {
                 "net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext",
             )
             replace("WorldRenderContext", "LevelRenderContext")
+            // Inventory click enum + the gameMode click method were both
+            // renamed (same params/values): ClickType -> ContainerInput,
+            // handleInventoryMouseClick -> handleContainerInput.
+            replace("net.minecraft.world.inventory.ClickType", "net.minecraft.world.inventory.ContainerInput")
+            replace("ClickType", "ContainerInput")
+            replace("handleInventoryMouseClick", "handleContainerInput")
         }
     }
 }
