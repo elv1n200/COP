@@ -81,7 +81,13 @@ object WorldUtils {
     val players: List<PlayerInfo>
         get() = tablist.filter { it.profile.id.version() == 4 }
 
-    val ClientLevel.day get() = this.dayTime / 24000
+    // 26.x renamed Level.getDayTime() -> getOverworldClockTime() (clock rework).
+    val ClientLevel.day get() =
+        //? if >= 26 {
+        /*this.overworldClockTime / 24000*/
+        //? } else {
+        this.dayTime / 24000
+        //? }
 
     fun getBlockEntityList(): List<BlockPos> {
         val player = mc.player ?: return emptyList()

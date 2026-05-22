@@ -5,6 +5,9 @@ import net.minecraft.network.chat.Component
 import net.minecraft.network.protocol.game.ClientboundSoundPacket
 import net.minecraft.resources.ResourceLocation
 import net.minecraft.sounds.SoundEvents
+//? if >= 26 {
+/*import net.minecraft.world.entity.animal.feline.CatSoundVariants*/
+//? }
 import net.minecraft.util.FormattedCharSequence
 import cop.api.events.GuiEvent
 import cop.api.events.PacketEvent
@@ -41,6 +44,18 @@ object CatMode : Module(
 
     private val renderer = FallingCatsRenderer()
 
+    // 26.x dropped the flat SoundEvents.CAT_AMBIENT constant — cat sounds moved
+    // to a per-variant system (CAT_SOUNDS map keyed by SoundSet). Pull the
+    // classic adult ambient holder; pre-26 keeps the old constant. The result
+    // is a Holder<SoundEvent> on both, so `== packet.sound` and `.value()` for
+    // playLocalSound work uniformly.
+    private val catAmbientSound get() =
+        //? if >= 26 {
+        /*SoundEvents.CAT_SOUNDS[CatSoundVariants.SoundSet.CLASSIC]!!.adultSounds().ambientSound()*/
+        //? } else {
+        SoundEvents.CAT_AMBIENT
+        //? }
+
     init {
         on<GuiEvent.DrawBackground.Post> {
             if (!fallingCats || mc.level == null) return@on
@@ -53,14 +68,14 @@ object CatMode : Module(
         }
 
         on<PacketEvent.Received, ClientboundSoundPacket> {
-            if (!meowSound || packet.sound == SoundEvents.CAT_AMBIENT) return@on
+            if (!meowSound || packet.sound == catAmbientSound) return@on
 
             cancel()
             mc.level?.playLocalSound(
                 packet.x,
                 packet.y,
                 packet.z,
-                SoundEvents.CAT_AMBIENT,
+                catAmbientSound.value(),
                 packet.source,
                 packet.volume,
                 packet.pitch,

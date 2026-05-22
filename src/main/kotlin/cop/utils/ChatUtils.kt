@@ -12,6 +12,9 @@ import com.mojang.authlib.GameProfile
 import net.fabricmc.fabric.impl.command.client.ClientCommandInternals
 import net.minecraft.client.GuiMessage
 import net.minecraft.client.GuiMessageTag
+//? if >= 26 {
+/*import net.minecraft.client.multiplayer.chat.GuiMessageSource*/
+//? }
 import net.minecraft.network.chat.*
 
 object ChatUtils {
@@ -68,7 +71,14 @@ object ChatUtils {
             editedLine = true
             messageList.remove()
 
-            val line = GuiMessage(msg.addedTime, replaceWith, null, indicator)
+            // 26.x GuiMessage record gained a GuiMessageSource between signature
+            // and tag (addedTime, content, signature, source, tag).
+            val line =
+                //? if >= 26 {
+                /*GuiMessage(msg.addedTime, replaceWith, null, GuiMessageSource.SYSTEM_CLIENT, indicator)*/
+                //? } else {
+                GuiMessage(msg.addedTime, replaceWith, null, indicator)
+                //? }
             line.id = msg.id
             messageList.add(line)
         }
@@ -122,7 +132,11 @@ object ChatUtils {
         }.also { chatStyle?.let(it::setStyle) }
 
         mc.execute {
+            //? if >= 26 {
+            /*id?.let { chatGui.add(text, it) } ?: chatGui.addClientSystemMessage(text)*/
+            //? } else {
             id?.let { chatGui.add(text, it) } ?: chatGui.addMessage(text)
+            //? }
         }
     }
 }

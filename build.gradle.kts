@@ -207,6 +207,10 @@ if (mcVersion.startsWith("26")) {
     listOf("compileKotlin", "compileJava", "processResources").forEach { t ->
         tasks.named(t) { dependsOn("stonecutterGenerate") }
     }
+    // sourcesJar (from withSourcesJar(), registered later) also reads the
+    // generated tree; wire it lazily so it gets the dependency whenever it's
+    // created — otherwise Gradle's task-output validation fails the build.
+    tasks.matching { it.name == "sourcesJar" }.configureEach { dependsOn("stonecutterGenerate") }
 }
 
 java {

@@ -69,8 +69,14 @@ class UpdateScreen(
         )
     }
 
+    // 26.x: Screen.render(...) -> extractRenderState(...) (deferred GUI model).
+    //? if >= 26 {
+    /*override fun extractRenderState(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    *///? } else {
     override fun render(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
         super.render(g, mouseX, mouseY, partialTick)
+    //? }
 
         val px = (width - panelWidth) / 2
         val py = (height - panelHeight) / 2

@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import net.minecraft.client.GuiMessage;
+//? if >= 26 {
+/*import net.minecraft.client.multiplayer.chat.GuiMessageSource;*/
+//? }
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.client.gui.components.EditBox;
@@ -114,7 +117,11 @@ public class ChatScreenMixin extends Screen implements ISearchMode {
             messageBackup.clear();
 
             for (Component queuedMessage : queuedMessages) {
+                //? if >= 26 {
+                /*chatHud.addClientSystemMessage(queuedMessage);*/
+                //? } else {
                 chatHud.addMessage(queuedMessage);
+                //? }
             }
             queuedMessages.clear();
 
@@ -150,7 +157,12 @@ public class ChatScreenMixin extends Screen implements ISearchMode {
 
             messages.addAll(filteredResults);
         }
+        // 26.x GuiMessage record inserted a GuiMessageSource before the tag.
+        //? if >= 26 {
+        /*messages.addFirst(new GuiMessage(mc.gui.getGuiTicks(), Component.literal("§e§lSEARCH ON"), null, GuiMessageSource.SYSTEM_CLIENT, null));*/
+        //? } else {
         messages.addFirst(new GuiMessage(mc.gui.getGuiTicks(), Component.literal("§e§lSEARCH ON"), null, null));
+        //? }
         chatHud.rescaleChat();
     }
 

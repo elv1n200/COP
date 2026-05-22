@@ -64,7 +64,13 @@ object CrystalHollowsScanner : Module(
 
                     if (chunkX !in X_MIN..X_MAX || chunkZ !in Z_MIN..Z_MAX) return@launch
 
-                    val chunkKey = chunk.pos.toLong()
+                    // 26.x renamed ChunkPos.toLong() -> pack().
+                    val chunkKey =
+                        //? if >= 26 {
+                        /*chunk.pos.pack()*/
+                        //? } else {
+                        chunk.pos.toLong()
+                        //? }
 
                     if (!scannedChunks.contains(chunkKey)) {
                         scannedChunks.add(chunkKey)

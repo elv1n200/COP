@@ -20,6 +20,19 @@ class UIScreen(val instance: AbobaUI.Instance, val background: Boolean = true ) 
         instance.init(width * sf, height * sf)
     }
 
+    // 26.x moved GUI drawing to a deferred extract model: Screen.render(...) ->
+    // extractRenderState(...), renderBackground(...) -> extractBackground(...).
+    //? if >= 26 {
+    /*override fun extractRenderState(ctx: GuiGraphics, mouseX: Int, mouseY: Int, deltaTicks: Float) {
+        instance.ctx = ctx
+        instance.eventManager.onMouseMove(mouseX * sf.toFloat(), mouseY * sf.toFloat())
+        NVGSpecialRenderer.draw(ctx, 0, 0, ctx.guiWidth(), ctx.guiHeight()) {
+            instance.render(true)
+        }
+        instance.render(false)
+        super.extractRenderState(ctx, mouseX, mouseY, deltaTicks)
+    }*/
+    //? } else {
     override fun render(ctx: GuiGraphics, mouseX: Int, mouseY: Int, deltaTicks: Float) {
         instance.ctx = ctx
         instance.eventManager.onMouseMove(mouseX * sf.toFloat(), mouseY * sf.toFloat())
@@ -29,6 +42,7 @@ class UIScreen(val instance: AbobaUI.Instance, val background: Boolean = true ) 
         instance.render(false)
         super.render(ctx, mouseX, mouseY, deltaTicks)
     }
+    //? }
 
     override fun mouseClicked(mouseButtonEvent: MouseButtonEvent, doubled: Boolean) =
         instance.eventManager.onMouseClick(mouseButtonEvent.button())
@@ -70,9 +84,15 @@ class UIScreen(val instance: AbobaUI.Instance, val background: Boolean = true ) 
 
     override fun isPauseScreen() = false
 
+    //? if >= 26 {
+    /*override fun extractBackground(guiGraphics: GuiGraphics, mouseY: Int, j: Int, deltaTicks: Float) {
+        if (background) super.extractBackground(guiGraphics, mouseY, j, deltaTicks)
+    }*/
+    //? } else {
     override fun renderBackground(guiGraphics: GuiGraphics, mouseY: Int, j: Int, deltaTicks: Float) {
         if (background) super.renderBackground(guiGraphics, mouseY, j, deltaTicks)
     }
+    //? }
 
     companion object {
         fun open(ui: AbobaUI.Instance, background: Boolean = true) = scheduleTask { mc.setScreen(UIScreen(ui, background)) }

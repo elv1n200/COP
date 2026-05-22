@@ -19,14 +19,22 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import static cop.module.impl.render.RenderOptimiser.should;
 
 /**
- * 1.21.11 added a second boolean argument to {@code GuiTextRenderState}'s ctor
- * and switched the matrix parameter from the concrete {@code Matrix3x2f} to
- * the read-only {@code Matrix3x2fc} interface. Mixin {@code @Redirect} requires
- * the method signature to match the targeted constructor exactly, so the two
- * versions need separate method bodies.
+ * Disables (or force-enables, in containers) text shadow by redirecting the
+ * {@code GuiTextRenderState} construction inside the {@code drawString}/{@code
+ * text} render path.
+ *
+ * 1.21.11 added a second boolean arg to {@code GuiTextRenderState}'s ctor and
+ * switched the matrix parameter from the concrete {@code Matrix3x2f} to the
+ * read-only {@code Matrix3x2fc} interface, so the two versions need separate
+ * method bodies. 26.x renamed {@code GuiGraphics}->{@code GuiGraphicsExtractor},
+ * {@code drawString}->{@code text} and moved {@code GuiTextRenderState} to
+ * {@code net.minecraft.client.renderer.state.gui} (all handled by Stonecutter
+ * replacements), but the >=1.21.11 ctor shape is unchanged so that branch still
+ * applies. Class is named {@code TextShadowMixin} (not {@code GuiGraphicsMixin})
+ * so the bare {@code GuiGraphics} replacement can't clobber the class name.
  */
 @Mixin(GuiGraphics.class)
-public class GuiGraphicsMixin {
+public class TextShadowMixin {
 
     @Redirect(
             method = "drawString(Lnet/minecraft/client/gui/Font;Lnet/minecraft/util/FormattedCharSequence;IIIZ)V",

@@ -1,10 +1,14 @@
 package cop.utils.ui.rendering
 
 import cop.CopMod.mc
-import com.mojang.blaze3d.opengl.GlConst
-import com.mojang.blaze3d.opengl.GlDevice
 import com.mojang.blaze3d.opengl.GlStateManager
+// 26.x made GlDevice/GlTexture/GlConst package-private/removed — the manual
+// FBO-rebind trick they enabled only exists on the 1.21.x branch.
+//? if <= 1.21.11 {
+/*import com.mojang.blaze3d.opengl.GlConst
+import com.mojang.blaze3d.opengl.GlDevice
 import com.mojang.blaze3d.opengl.GlTexture
+*///? }
 import com.mojang.blaze3d.systems.RenderSystem
 import com.mojang.blaze3d.vertex.PoseStack
 import net.minecraft.client.gui.GuiGraphics
@@ -24,6 +28,27 @@ import org.joml.Matrix3x2f
 class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
     : PictureInPictureRenderer<NVGSpecialRenderer.NVGRenderState>(vertexConsumers) {
 
+    //? if >= 26 {
+    /*// 26.x encapsulated the GL device/texture internals (GlDevice, GlTexture,
+    // GlConst all package-private/removed), so the 1.21.x manual FBO-rebind is
+    // no longer reachable. The base PictureInPictureRenderer already binds the
+    // offscreen target before calling renderToTexture, so NVG draws straight
+    // into it. NOTE: needs in-game verification on 26.x (glyph sampler state).
+    override fun renderToTexture(state: NVGRenderState, poseStack: PoseStack) {
+        val colorTex = RenderSystem.outputColorTextureOverride ?: return
+        val width = colorTex.getWidth(0)
+        val height = colorTex.getHeight(0)
+
+        NVGRenderer.beginFrame(width.toFloat(), height.toFloat())
+        state.renderContent()
+        NVGRenderer.endFrame()
+
+        GlStateManager._disableDepthTest()
+        GlStateManager._disableCull()
+        GlStateManager._enableBlend()
+        GlStateManager._blendFuncSeparate(770, 771, 1, 0)
+    }*/
+    //? } else {
     override fun renderToTexture(state: NVGRenderState, poseStack: PoseStack) {
         val colorTex = RenderSystem.outputColorTextureOverride
         val bufferManager = (RenderSystem.getDevice() as? GlDevice)?.directStateAccess() ?: return
@@ -58,6 +83,7 @@ class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
         /*glBindSampler(0, prevSampler)
         *///? }
     }
+    //? }
 
     override fun getTranslateY(height: Int, windowScaleFactor: Int): Float = height / 2f
     override fun getRenderStateClass(): Class<NVGRenderState> = NVGRenderState::class.java
@@ -81,6 +107,11 @@ class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
         override fun y1(): Int = y + height
         override fun scissorArea(): ScreenRectangle? = scissor
         override fun bounds(): ScreenRectangle? = bounds
+        // 26.x added PictureInPictureRenderState.pose() (default IDENTITY_POSE);
+        // feed it our stored matrix so the offscreen draw is positioned right.
+        //? if >= 26 {
+        /*override fun pose(): Matrix3x2f = poseMatrix*/
+        //? }
     }
 
     companion object {

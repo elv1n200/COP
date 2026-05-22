@@ -1,6 +1,6 @@
 {
   "required": true,
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "minVersion": "0.8",
   "package": "cop.mixins",
   "refmap": "mixins.cop.refmap.json",
@@ -27,7 +27,7 @@
     "EntityRendererMixin",
     "FogRendererMixin",
     "FontMixin",
-    "GuiGraphicsMixin",
+    "TextShadowMixin",
     "GuiMessage",
     "GuiMessageLineMixin",
     "GuiMixin",
