@@ -10,6 +10,14 @@ import com.mojang.blaze3d.opengl.GlDevice
 import com.mojang.blaze3d.opengl.GlTexture
 *///? }
 import com.mojang.blaze3d.systems.RenderSystem
+// 26.x: the offscreen FBO is reached via the (public) DirectStateAccess +
+// GpuTexture(View) types; the GlDevice/GlTextureView holding them are
+// package-private, so the actual getFbo/directStateAccess calls go via reflection.
+//? if >= 26 {
+/*import com.mojang.blaze3d.opengl.DirectStateAccess
+import com.mojang.blaze3d.textures.GpuTexture
+import com.mojang.blaze3d.textures.GpuTextureView*/
+//? }
 import com.mojang.blaze3d.vertex.PoseStack
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.navigation.ScreenRectangle
@@ -29,15 +37,33 @@ class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
     : PictureInPictureRenderer<NVGSpecialRenderer.NVGRenderState>(vertexConsumers) {
 
     //? if >= 26 {
-    /*// 26.x encapsulated the GL device/texture internals (GlDevice, GlTexture,
-    // GlConst all package-private/removed), so the 1.21.x manual FBO-rebind is
-    // no longer reachable. The base PictureInPictureRenderer already binds the
-    // offscreen target before calling renderToTexture, so NVG draws straight
-    // into it. NOTE: needs in-game verification on 26.x (glyph sampler state).
+    /*// 26.x's base PictureInPictureRenderer sets up the offscreen texture through
+    // the GPU abstraction but never binds a GL framebuffer before renderToTexture,
+    // so NanoVG's raw-GL draws would miss it entirely. Re-establish the 1.21.x
+    // bind: GlTextureView.getFbo(DirectStateAccess, depthTexture) gives the FBO id.
+    // GlDevice/GlTextureView are package-private, so reach getFbo/directStateAccess
+    // reflectively (the value types DirectStateAccess/GpuTexture(View) are public).
+    private var backendField: java.lang.reflect.Field? = null
+    private var dsaMethod: java.lang.reflect.Method? = null
+    private var getFboMethod: java.lang.reflect.Method? = null
+    private var fboErrLogged = false
+
     override fun renderToTexture(state: NVGRenderState, poseStack: PoseStack) {
-        val colorTex = RenderSystem.outputColorTextureOverride ?: return
-        val width = colorTex.getWidth(0)
-        val height = colorTex.getHeight(0)
+        val colorView = RenderSystem.outputColorTextureOverride ?: return
+        val depthTex = RenderSystem.outputDepthTextureOverride?.texture() ?: return
+        val width = colorView.getWidth(0)
+        val height = colorView.getHeight(0)
+
+        // 36160 = GL_FRAMEBUFFER (avoid referencing the package-private GlConst).
+        fboFor(colorView, depthTex)?.let { fbo ->
+            GlStateManager._glBindFramebuffer(36160, fbo)
+            GlStateManager._viewport(0, 0, width, height)
+        }
+
+        // Same sampler-unit-0 workaround as 1.21.11 (RenderPipeline binds a sampler
+        // that turns NVG glyphs into white blocks); null it around the NVG draw.
+        val prevSampler = glGetInteger(GL_SAMPLER_BINDING)
+        glBindSampler(0, 0)
 
         NVGRenderer.beginFrame(width.toFloat(), height.toFloat())
         state.renderContent()
@@ -47,6 +73,26 @@ class NVGSpecialRenderer(vertexConsumers: MultiBufferSource.BufferSource)
         GlStateManager._disableCull()
         GlStateManager._enableBlend()
         GlStateManager._blendFuncSeparate(770, 771, 1, 0)
+
+        glBindSampler(0, prevSampler)
+    }
+
+    private fun fboFor(colorView: GpuTextureView, depthTex: GpuTexture): Int? = try {
+        val device = RenderSystem.getDevice()
+        if (getFboMethod == null) {
+            backendField = device.javaClass.getDeclaredField("backend").apply { isAccessible = true }
+            val backend = backendField!!.get(device)
+            dsaMethod = backend.javaClass.getMethod("directStateAccess").apply { isAccessible = true }
+            getFboMethod = colorView.javaClass
+                .getMethod("getFbo", DirectStateAccess::class.java, GpuTexture::class.java)
+                .apply { isAccessible = true }
+        }
+        val backend = backendField!!.get(device)
+        val dsa = dsaMethod!!.invoke(backend) as DirectStateAccess
+        getFboMethod!!.invoke(colorView, dsa, depthTex) as Int
+    } catch (e: Throwable) {
+        if (!fboErrLogged) { fboErrLogged = true; cop.CopMod.logger.error("[cop] NVG offscreen FBO bind failed", e) }
+        null
     }*/
     //? } else {
     override fun renderToTexture(state: NVGRenderState, poseStack: PoseStack) {

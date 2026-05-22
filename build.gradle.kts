@@ -97,7 +97,12 @@ dependencies {
     implementation("io.github.classgraph:classgraph:4.8.184")
     include("io.github.classgraph:classgraph:4.8.184")
 
-    property("minecraft_lwjgl_version").let {
+    // lwjgl-nanovg isn't shipped by MC, so we bundle it — but it MUST match the
+    // LWJGL core version MC provides, or the nanovg struct accessors (NSVGImage,
+    // etc.) link against a different core and blow up (26.x: NSVGImage.UNSAFE was
+    // removed in 3.4.x). 1.21.x MC uses 3.3.3; 26.x uses 3.4.1.
+    val lwjglVersion = if (mcVersion.startsWith("26")) "3.4.1" else property("minecraft_lwjgl_version") as String
+    lwjglVersion.let {
         implementation("org.lwjgl:lwjgl-nanovg:$it")
         include("org.lwjgl:lwjgl-nanovg:$it")
 
