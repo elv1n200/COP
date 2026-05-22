@@ -26,7 +26,14 @@ import java.util.regex.Pattern;
 @Mixin(Gui.class)
 public class GuiMixin {
 
-    @Redirect(
+    // 26.x reworked the HUD into a deferred extractRenderState/extract*Overlay
+    // model and removed the discrete renderPlayerHealth/renderArmor/renderHearts/
+    // renderFood/renderVehicleHealth methods these injects target. The
+    // PlayerDisplay HUD-hiding hooks are therefore <=1.21.11-only for now (TODO:
+    // re-home them onto the 26.x deferred HUD extraction). The scoreboard
+    // server-id filter below targets displayScoreboardSidebar, which survives.
+    //? if <= 1.21.11 {
+    /*@Redirect(
             method = "renderPlayerHealth",
             at = @At(
                     value = "INVOKE",
@@ -97,6 +104,7 @@ public class GuiMixin {
     private boolean disableRegenBounce(boolean original) {
         return !PlayerDisplay.shouldCancelHud(HudType.REGEN_BOUNCE) && original;
     }
+    *///? }
 
     @Unique private static final Pattern DATE_LINE_PATTERN = Pattern.compile("^(\\d{2}/\\d{2}/\\d{2}).*$");
     @Unique private static final Pattern STRIP_ALL_COLOR_PATTERN = Pattern.compile("(?i)§.");

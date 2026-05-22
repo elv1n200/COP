@@ -35,10 +35,19 @@ public abstract class ChatComponentMixin implements IChatComponent {
     @Final
     private List<GuiMessage> allMessages;
 
+    // 26.x split ChatComponent's single addMessage funnel: the public entry
+    // points are addClientSystemMessage / addServerSystemMessage / addPlayerMessage,
+    // all routing through a private 4-arg addMessage(...GuiMessageSource...). The
+    // old 3-arg addMessage / 1-arg addMessage no longer exist publicly.
+    //? if >= 26 {
+    /*@Shadow
+    public abstract void addClientSystemMessage(Component message);*/
+    //? } else {
     @Shadow
     public abstract void addMessage(Component message, @Nullable MessageSignature signatureData, @Nullable GuiMessageTag indicator);
     @Shadow
     public abstract void addMessage(Component message);
+    //? }
 
     @Unique
     private int nextId;
@@ -52,7 +61,11 @@ public abstract class ChatComponentMixin implements IChatComponent {
         }
 
         nextId = id;
+        //? if >= 26 {
+        /*addClientSystemMessage(message);*/
+        //? } else {
         addMessage(message);
+        //? }
         nextId = 0;
     }
 
@@ -81,26 +94,41 @@ public abstract class ChatComponentMixin implements IChatComponent {
         }
     }
 
+    // 26.x: the 3-arg addMessage and 1-arg addMessage are gone; the private
+    // 4-arg addMessage(...GuiMessageSource...) is the single funnel every add
+    // path routes through, so target it (capturing only the leading Component).
     @Inject(
+            //? if >= 26 {
+            /*method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",*/
+            //? } else {
             method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/GuiMessageTag;)V",
+            //? }
             at = @At("HEAD"),
             cancellable = true
     )
-    private void onAddMessage(Component message, MessageSignature signatureData, GuiMessageTag indicator, CallbackInfo ci) {
+    private void onAddMessage(Component message, CallbackInfo ci) {
         if (new ChatEvent.Receive(message.getString(), message, nextId).post()) ci.cancel();
     }
 
     @Inject(
+            //? if >= 26 {
+            /*method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",*/
+            //? } else {
             method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/GuiMessageTag;)V",
+            //? }
             at = @At("TAIL"),
             cancellable = true
     )
-    private void onAddMessagePost(Component message, MessageSignature signatureData, GuiMessageTag indicator, CallbackInfo ci) {
+    private void onAddMessagePost(Component message, CallbackInfo ci) {
         if (new ChatEvent.Receive.Post(message.getString(), message, nextId).post()) ci.cancel();
     }
 
     @Inject(
+            //? if >= 26 {
+            /*method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",*/
+            //? } else {
             method = "addMessage(Lnet/minecraft/network/chat/Component;)V",
+            //? }
             at = @At("HEAD"),
             cancellable = true
     )

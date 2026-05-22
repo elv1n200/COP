@@ -48,6 +48,22 @@ stonecutter parameters {
             replace("net.minecraft.client.gui.GuiGraphics", "net.minecraft.client.gui.GuiGraphicsExtractor")
             replace("GuiGraphics", "GuiGraphicsExtractor")
             replace("net.minecraft.client.GuiMessage", "net.minecraft.client.multiplayer.chat.GuiMessage")
+            // Slash form too (mixin @Inject/@At descriptors reference GuiMessage /
+            // GuiMessageTag by internal name). Catches GuiMessageTag via substring.
+            replace("net/minecraft/client/GuiMessage", "net/minecraft/client/multiplayer/chat/GuiMessage")
+            // 26.x renamed the GUI render entry points to deferred extract*
+            // methods. These narrow `method = "..."` literals only touch mixin
+            // @Inject/@ModifyVariable targets (exact-quote match, so e.g.
+            // `method = "render"` does NOT hit `"renderSlot"`/`"renderBackground"`):
+            //   ChatComponent.render -> extractRenderState
+            //   Screen.renderWithTooltipAndSubtitles -> extractRenderStateWithTooltipAndSubtitles
+            //   Screen.renderBackground -> extractBackground
+            //   AbstractContainerScreen.renderSlot -> extractSlot, renderTooltip -> extractTooltip
+            replace("method = \"render\"", "method = \"extractRenderState\"")
+            replace("method = \"renderWithTooltipAndSubtitles\"", "method = \"extractRenderStateWithTooltipAndSubtitles\"")
+            replace("method = \"renderBackground\"", "method = \"extractBackground\"")
+            replace("method = \"renderSlot\"", "method = \"extractSlot\"")
+            replace("method = \"renderTooltip\"", "method = \"extractTooltip\"")
             // Fabric reworked the world-render API: WorldRenderContext
             // (...rendering.v1.world) -> LevelRenderContext (...v1.level).
             // FQ import first, then the bare type — order matters so the
