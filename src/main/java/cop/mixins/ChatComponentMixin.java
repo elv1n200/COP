@@ -20,6 +20,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.List;
 import net.minecraft.client.GuiMessage;
 import net.minecraft.client.GuiMessageTag;
+//? if >= 26 {
+/*import net.minecraft.client.multiplayer.chat.GuiMessageSource;*/
+//? }
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.client.gui.screens.Screen;
@@ -96,39 +99,65 @@ public abstract class ChatComponentMixin implements IChatComponent {
 
     // 26.x: the 3-arg addMessage and 1-arg addMessage are gone; the private
     // 4-arg addMessage(...GuiMessageSource...) is the single funnel every add
-    // path routes through, so target it (capturing only the leading Component).
-    @Inject(
-            //? if >= 26 {
-            /*method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",*/
-            //? } else {
-            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/GuiMessageTag;)V",
-            //? }
+    // path routes through. Mixin @Inject requires the handler params to match
+    // the target's signature exactly (not a prefix), so the whole handler is
+    // version-branched even though the body only uses `message`.
+    //? if >= 26 {
+    /*@Inject(
+            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",
             at = @At("HEAD"),
             cancellable = true
     )
-    private void onAddMessage(Component message, CallbackInfo ci) {
+    private void onAddMessage(Component message, MessageSignature signatureData, GuiMessageSource source, GuiMessageTag indicator, CallbackInfo ci) {
         if (new ChatEvent.Receive(message.getString(), message, nextId).post()) ci.cancel();
     }
 
     @Inject(
-            //? if >= 26 {
-            /*method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",*/
-            //? } else {
-            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/GuiMessageTag;)V",
-            //? }
+            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",
             at = @At("TAIL"),
             cancellable = true
     )
-    private void onAddMessagePost(Component message, CallbackInfo ci) {
+    private void onAddMessagePost(Component message, MessageSignature signatureData, GuiMessageSource source, GuiMessageTag indicator, CallbackInfo ci) {
         if (new ChatEvent.Receive.Post(message.getString(), message, nextId).post()) ci.cancel();
+    }*/
+    //? } else {
+    @Inject(
+            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/GuiMessageTag;)V",
+            at = @At("HEAD"),
+            cancellable = true
+    )
+    private void onAddMessage(Component message, MessageSignature signatureData, GuiMessageTag indicator, CallbackInfo ci) {
+        if (new ChatEvent.Receive(message.getString(), message, nextId).post()) ci.cancel();
     }
 
     @Inject(
-            //? if >= 26 {
-            /*method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",*/
-            //? } else {
+            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/GuiMessageTag;)V",
+            at = @At("TAIL"),
+            cancellable = true
+    )
+    private void onAddMessagePost(Component message, MessageSignature signatureData, GuiMessageTag indicator, CallbackInfo ci) {
+        if (new ChatEvent.Receive.Post(message.getString(), message, nextId).post()) ci.cancel();
+    }
+    //? }
+
+    //? if >= 26 {
+    /*@Inject(
+            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",
+            at = @At("HEAD"),
+            cancellable = true
+    )
+    private void interceptMessage(Component message, MessageSignature signatureData, GuiMessageSource source, GuiMessageTag indicator, CallbackInfo ci) {
+        Screen currentScreen = Minecraft.getInstance().screen;
+        if (currentScreen instanceof ISearchMode searchScreen) {
+            if (searchScreen.cop$isSearchActive()) {
+                searchScreen.cop$queueMessage(message);
+                ci.cancel();
+            }
+        }
+    }*/
+    //? } else {
+    @Inject(
             method = "addMessage(Lnet/minecraft/network/chat/Component;)V",
-            //? }
             at = @At("HEAD"),
             cancellable = true
     )
@@ -141,6 +170,7 @@ public abstract class ChatComponentMixin implements IChatComponent {
             }
         }
     }
+    //? }
 
     // 1.21.11 added a second boolean param to `render`, so the implicit
     // discriminator can no longer pick "the boolean" — pin to ordinal = 0
