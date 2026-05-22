@@ -26,14 +26,15 @@ import java.util.regex.Pattern;
 @Mixin(Gui.class)
 public class GuiMixin {
 
-    // 26.x reworked the HUD into a deferred extractRenderState/extract*Overlay
-    // model and removed the discrete renderPlayerHealth/renderArmor/renderHearts/
-    // renderFood/renderVehicleHealth methods these injects target. The
-    // PlayerDisplay HUD-hiding hooks are therefore <=1.21.11-only for now (TODO:
-    // re-home them onto the 26.x deferred HUD extraction). The scoreboard
-    // server-id filter below targets displayScoreboardSidebar, which survives.
-    //? if <= 1.21.11 {
-    /*@Redirect(
+    // PlayerDisplay HUD-hiding. 26.x renamed the discrete HUD render methods to
+    // deferred extract* equivalents with identical signatures (renderPlayerHealth
+    // -> extractPlayerHealth, renderArmor -> extractArmor, renderHearts ->
+    // extractHearts, renderFood -> extractFood, renderVehicleHealth ->
+    // extractVehicleHealth); the >=26 Stonecutter replacements rewrite the method=
+    // targets, GuiGraphics -> GuiGraphicsExtractor is global, and the INVOKE
+    // targets (Player.getAbsorptionAmount / hasEffect, still called by
+    // extractPlayerHealth) are unchanged.
+    @Redirect(
             method = "renderPlayerHealth",
             at = @At(
                     value = "INVOKE",
@@ -45,17 +46,6 @@ public class GuiMixin {
             return 0.0F;
         }
         return instance.getAbsorptionAmount();
-    }
-
-    @Inject(
-            method = "render",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/Gui;renderSleepOverlay(Lnet/minecraft/client/gui/GuiGraphics;Lnet/minecraft/client/DeltaTracker;)V"
-            )
-    )
-    private void render(GuiGraphics guiGraphics, DeltaTracker deltaTracker, CallbackInfo ci) {
-//        new RenderEvent.Overlay(guiGraphics, deltaTracker).post();
     }
 
     @Inject(
@@ -104,7 +94,6 @@ public class GuiMixin {
     private boolean disableRegenBounce(boolean original) {
         return !PlayerDisplay.shouldCancelHud(HudType.REGEN_BOUNCE) && original;
     }
-    *///? }
 
     @Unique private static final Pattern DATE_LINE_PATTERN = Pattern.compile("^(\\d{2}/\\d{2}/\\d{2}).*$");
     @Unique private static final Pattern STRIP_ALL_COLOR_PATTERN = Pattern.compile("(?i)§.");

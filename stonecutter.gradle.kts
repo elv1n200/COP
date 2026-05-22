@@ -64,6 +64,12 @@ stonecutter parameters {
             replace("method = \"renderBackground\"", "method = \"extractBackground\"")
             replace("method = \"renderSlot\"", "method = \"extractSlot\"")
             replace("method = \"renderTooltip\"", "method = \"extractTooltip\"")
+            // Gui HUD methods (PlayerDisplay HUD-hiding) -> deferred extract*.
+            replace("method = \"renderPlayerHealth\"", "method = \"extractPlayerHealth\"")
+            replace("method = \"renderArmor\"", "method = \"extractArmor\"")
+            replace("method = \"renderHearts\"", "method = \"extractHearts\"")
+            replace("method = \"renderFood\"", "method = \"extractFood\"")
+            replace("method = \"renderVehicleHealth\"", "method = \"extractVehicleHealth\"")
             // Fabric reworked the world-render API: WorldRenderContext
             // (...rendering.v1.world) -> LevelRenderContext (...v1.level).
             // FQ import first, then the bare type — order matters so the

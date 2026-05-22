@@ -10,14 +10,27 @@ import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 @Mixin(NameTagFeatureRenderer.class)
 public class NameTagFeatureRendererMixin {
 
-    // 26.x replaced NameTagFeatureRenderer.render(...) (which called
-    // Font.drawInBatch) with renderTranslucent(SubmitNodeCollection, ...) that
-    // submits text through the deferred SubmitNodeCollector — there's no
-    // drawInBatch call to @ModifyArgs anymore. The NameTags shadow/background
-    // override is therefore <=1.21.11-only for now (TODO: re-home onto the 26.x
-    // submit path).
-    //? if <= 1.21.11 {
+    // 26.x renamed render(...) -> renderTranslucent(SubmitNodeCollection, ...), but
+    // it still funnels through Font.drawInBatch with the same arg order, so the
+    // shadow (arg 4) / background-color (arg 8) overrides still apply. Only the
+    // target method name and the matrix param (Matrix4f -> Matrix4fc) differ.
+    // Spelled out per-version because the bare method name must NOT be "render"
+    // (the >=26 method= replacement rewrites that to extractRenderState).
+    //? if >= 26 {
     /*@ModifyArgs(
+            method = "renderTranslucent",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/gui/Font;drawInBatch(Lnet/minecraft/network/chat/Component;FFIZLorg/joml/Matrix4fc;Lnet/minecraft/client/renderer/MultiBufferSource;Lnet/minecraft/client/gui/Font$DisplayMode;II)V"
+            )
+    )
+    private void draw(Args args) {
+        if (!NameTags.INSTANCE.getEnabled()) return;
+        args.set(4, NameTags.getShadow());
+        if (NameTags.getCustomBg()) args.set(8, NameTags.getBgColour().getRgb());
+    }*/
+    //? } else {
+    @ModifyArgs(
             method = "render",
             at = @At(
                     value = "INVOKE",
@@ -29,5 +42,5 @@ public class NameTagFeatureRendererMixin {
         args.set(4, NameTags.getShadow());
         if (NameTags.getCustomBg()) args.set(8, NameTags.getBgColour().getRgb());
     }
-    *///? }
+    //? }
 }
