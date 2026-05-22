@@ -62,6 +62,7 @@ object ModuleManager {
             CancelInteract,
             AutoMask,
             AutoGFS,
+            AutoPotionBag,
             AutoSuperboom,
             Ragnarock,
 
