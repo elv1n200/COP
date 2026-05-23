@@ -1,4 +1,4 @@
-package cop.module.impl.dungeon
+package cop.module.impl.misc
 
 import cop.api.events.GuiEvent
 import cop.api.events.TickEvent

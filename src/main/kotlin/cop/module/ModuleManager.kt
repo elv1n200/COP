@@ -63,7 +63,6 @@ object ModuleManager {
             AutoMask,
             AutoGFS,
             AutoPotionBag,
-            AutoAnvilBookCombine,
             AutoSuperboom,
             Ragnarock,
 
@@ -89,6 +88,7 @@ object ModuleManager {
             WardrobeKeybinds,
             AntiNick,
             AutoClicker,
+            AutoAnvilBookCombine,
             Inventory,
 //            CustomTriggers,
             MirrorverseSolvers,
