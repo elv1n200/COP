@@ -15,9 +15,9 @@ import cop.api.abobaui.elements.impl.TextInput.Companion.onTextChanged
 import cop.api.abobaui.elements.impl.refreshableGroup
 import cop.api.colour.*
 import cop.api.events.GuiEvent
-import cop.api.events.KeyEvent
 import cop.api.events.TickEvent
 import cop.api.events.core.Priority
+import cop.api.input.CatKeys
 import cop.utils.Scheduler.scheduleTask
 import cop.utils.skyblock.player.ContainerUtils.clickSlot
 import cop.api.input.CursorShape
@@ -224,8 +224,13 @@ object Inventory : Module(
             if (focused) cancel()
         }
 
-        on<KeyEvent.Press> {
-            if (mc.screen !is AbstractContainerScreen<*>) return@on
+        // GuiEvent.Key.Press is the right channel for keys pressed while a Screen
+        // is open — KeyEvent.Press doesn't fire because the screen consumes input
+        // first. cancel() so a bound letter doesn't also type into the search bar.
+        on<GuiEvent.Key.Press> {
+            if (key == CatKeys.KEY_NONE) return@on
+            val screen = mc.screen as? AbstractContainerScreen<*> ?: return@on
+            if (screen.menu.slots.size <= 46) return@on   // player-inv only; nothing to dump/withdraw to
             if (highlightSlots.isEmpty()) return@on
             when (key) {
                 dumpKey.key -> { transferMatching(toChest = true); cancel() }
