@@ -90,7 +90,6 @@ object ModuleManager {
             AntiNick,
             AutoClicker,
             Inventory,
-            InventorySearch,
 //            CustomTriggers,
             MirrorverseSolvers,
             CatMode,

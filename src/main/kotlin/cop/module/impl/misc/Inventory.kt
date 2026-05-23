@@ -15,8 +15,11 @@ import cop.api.abobaui.elements.impl.TextInput.Companion.onTextChanged
 import cop.api.abobaui.elements.impl.refreshableGroup
 import cop.api.colour.*
 import cop.api.events.GuiEvent
+import cop.api.events.KeyEvent
 import cop.api.events.TickEvent
 import cop.api.events.core.Priority
+import cop.utils.Scheduler.scheduleTask
+import cop.utils.skyblock.player.ContainerUtils.clickSlot
 import cop.api.input.CursorShape
 import cop.module.Module
 import cop.utils.ChatUtils.modMessage
@@ -39,8 +42,25 @@ object Inventory : Module(
 
     private val bgColour by colourPicker("Background colour", Colour.GREY.withAlpha(100), allowAlpha = true)
     private val outlineColour by colourPicker("Outline colour", Colour.GREY.withAlpha(150), allowAlpha = true)
-    private val nameColour by colourPicker("Name match", Colour.WHITE.withAlpha(200), allowAlpha = true)
-    private val loreColour by colourPicker("Lore colour", Colour.MAGENTA.withAlpha(200), allowAlpha = true)
+    // Match outlines: a name-match uses one colour, a lore-only match another, so
+    // you can tell at a glance whether the item itself or just its lore matched.
+    private val nameColour by colourPicker("Name match", Colour.RGB(255, 220, 40, 1f), allowAlpha = true,
+        desc = "Outline colour for items whose name matches the search.")
+    private val loreColour by colourPicker("Lore colour", Colour.MAGENTA.withAlpha(200), allowAlpha = true,
+        desc = "Outline colour for items whose lore (but not name) matches the search.")
+    private val borderWidth by slider("Border width", 2, 1, 4, 1,
+        desc = "Outline thickness drawn around matching slots, in pixels.", unit = "px")
+    private val tintFill by switch("Tint fill", true,
+        desc = "Also tint the slot interior — peeks through transparent parts of the item icon.")
+
+    // dump = move matching items from your inventory into the open chest.
+    // withdraw = move matching items from the open chest into your inventory.
+    private val dumpKey by keybind("Dump key",
+        desc = "Move all matched items from your inventory into the open chest.")
+    private val withdrawKey by keybind("Withdraw key",
+        desc = "Move all matched items from the open chest into your inventory.")
+    private val transferDelay by slider("Transfer delay", 3, 1, 10, 1,
+        desc = "Ticks between each shift-click while dumping/withdrawing.", unit = "t")
 
     private val searchBar by textHud("Search bar", font = null, anchor = null) {
         block(
@@ -185,12 +205,68 @@ object Inventory : Module(
 
         on<GuiEvent.Slot.Draw> {
             val colour = highlightSlots.find { it.slot == slot.index }?.colour?.rgb ?: return@on
-            ctx.rect(slot.x, slot.y, 16, 16, colour)
+            val bw = borderWidth
+            // Draw the outline OUTSIDE the 16x16 item area (on the slot frame)
+            // so the item icon can't cover it. ctx.rect(x, y, w, h, colour) takes
+            // (x, y, width, height) — used as 4 thin rectangles to form a ring.
+            ctx.rect(slot.x - bw, slot.y - bw, 16 + bw * 2, bw, colour)            // top
+            ctx.rect(slot.x - bw, slot.y + 16, 16 + bw * 2, bw, colour)            // bottom
+            ctx.rect(slot.x - bw, slot.y, bw, 16, colour)                          // left
+            ctx.rect(slot.x + 16, slot.y, bw, 16, colour)                          // right
+            if (tintFill) {
+                // Faint interior tint — only peeks through transparent edges of
+                // the item icon, so it's an extra contrast cue on busy items.
+                ctx.rect(slot.x, slot.y, 16, 16, (colour and 0x00FFFFFF) or 0x40000000)
+            }
         }
 
         on<GuiEvent.Key.Press> (Priority.LOW) {
             if (focused) cancel()
         }
+
+        on<KeyEvent.Press> {
+            if (mc.screen !is AbstractContainerScreen<*>) return@on
+            if (highlightSlots.isEmpty()) return@on
+            when (key) {
+                dumpKey.key -> { transferMatching(toChest = true); cancel() }
+                withdrawKey.key -> { transferMatching(toChest = false); cancel() }
+            }
+        }
+    }
+
+    /** Shift-click every currently-matched slot one-by-one (with a small delay
+     *  between clicks so Hypixel can keep up) in the direction that moves the
+     *  item across the chest/inventory boundary.
+     *
+     *  @param toChest true  -> dump: matches in the player inventory get shift-
+     *                          clicked into the chest (iterate top-down).
+     *                 false -> withdraw: matches in the chest get shift-clicked
+     *                          into the inventory (iterate bottom-up). */
+    private fun transferMatching(toChest: Boolean) {
+        val screen = mc.screen as? AbstractContainerScreen<*> ?: return
+        val menu = screen.menu
+        val containerId = menu.containerId
+        val totalSlots = menu.slots.size
+        val chestEnd = totalSlots - 36  // first 'chestEnd' slots are the chest, the rest is the player inv
+
+        val toMove = highlightSlots.map { it.slot }
+            .filter { if (toChest) it >= chestEnd else it < chestEnd }
+            .let { if (toChest) it.sortedDescending() else it.sorted() }
+            .toList()
+        if (toMove.isEmpty()) return
+
+        // Snapshot the screen title so we abort if the player swaps to a
+        // different container mid-chain.
+        val title = screen.title.string
+
+        fun step(i: Int) {
+            if (i >= toMove.size) return
+            val s = mc.screen as? AbstractContainerScreen<*> ?: return
+            if (s.menu.containerId != containerId || s.title.string != title) return
+            mc.player?.clickSlot(toMove[i], containerId, button = 0, shift = true)
+            scheduleTask(transferDelay) { step(i + 1) }
+        }
+        step(0)
     }
 
     private fun matchType(name: String, lore: String, string: String) = when {
