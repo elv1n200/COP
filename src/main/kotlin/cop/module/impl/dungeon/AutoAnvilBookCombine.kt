@@ -93,12 +93,7 @@ object AutoAnvilBookCombine : Module(
     private fun bookMatchKey(stack: ItemStack?): String? {
         if (!isEnchantedBook(stack)) return null
         val ench = stack!!.extraAttributes?.getCompound("enchantments")?.orElse(null) ?: return null
-        // 26.x renamed CompoundTag.getAllKeys() -> keySet().
-        //? if >= 26 {
-        /*val keys = ench.keySet()*/
-        //? } else {
-        val keys = ench.allKeys
-        //? }
+        val keys = ench.keySet()
         // Only single-enchantment books combine cleanly.
         if (keys.size != 1) return null
         val name = keys.first()
