@@ -63,6 +63,7 @@ object ModuleManager {
             AutoMask,
             AutoGFS,
             AutoPotionBag,
+            AutoAnvilBookCombine,
             AutoSuperboom,
             Ragnarock,
 
