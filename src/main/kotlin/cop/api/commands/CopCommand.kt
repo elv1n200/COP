@@ -62,6 +62,37 @@ object CopCommand {
                 mc.keyboardHandler.clipboard = string.string
             }
 
+            // Phase-1 sanity check for the Auto Croesus price client.
+            // Usage: /copdev pricetest <ITEM_ID or display name>
+            "pricetest" { query: GreedyString ->
+                val raw = query.string.trim()
+                if (raw.isEmpty()) {
+                    modMessage("&cUsage: /copdev pricetest <ITEM_ID or display name>")
+                    return@invoke
+                }
+                modMessage("&7Fetching prices (cache age=${cop.utils.skyblock.PriceClient.ageMs / 1000}s)...")
+                cop.utils.skyblock.PriceClient.refreshIfStale {
+                    mc.execute {
+                        val pc = cop.utils.skyblock.PriceClient
+                        val id = pc.resolveItemId(raw) ?: raw.uppercase().replace(' ', '_')
+                        val bz = pc.getBazaarSell(id)
+                        val lb = pc.getLowestBin(id)
+                        val best = pc.getPrice(id)
+                        val err = pc.lastError
+                        if (err != null) {
+                            modMessage("&cPrice fetch error: &f$err")
+                            return@execute
+                        }
+                        modMessage(
+                            "&bPrice for &f$id&7:" +
+                                "\n  &7bazaar sell: " + (bz?.let { "&a$it" } ?: "&8n/a") +
+                                "\n  &7lowest BIN:  " + (lb?.let { "&a$it" } ?: "&8n/a") +
+                                "\n  &7best:        " + (best?.let { "&e$it" } ?: "&cunknown")
+                        )
+                    }
+                }
+            }
+
             "simulate" { message: GreedyString ->
                 EventBus.onPacketReceived(ClientboundSystemChatPacket(literal(message.string), false))
                 modMessage("simulated: ${message.string}")
