@@ -21,8 +21,12 @@ object InventorySearch : Module(
         desc = "Search is case-insensitive.")
     private val searchLore by switch("Search lore", true,
         desc = "Also match item lore (not just the name).")
-    private val highlightColour by colourPicker("Highlight", Colour.RED.withAlpha(180), allowAlpha = true,
-        desc = "Colour used to tint matching slots.")
+    private val highlightColour by colourPicker("Highlight", Colour.RGB(255, 220, 40, 1f), allowAlpha = true,
+        desc = "Colour of the outline drawn around matching slots.")
+    private val borderWidth by slider("Border width", 2, 1, 4, 1,
+        desc = "Thickness of the outline in pixels.", unit = "px")
+    private val tintFill by switch("Tint fill", true,
+        desc = "Also tint the slot interior (peeks through transparent parts of the item).")
 
     private var searchQuery: String = ""
 
@@ -66,7 +70,19 @@ object InventorySearch : Module(
             val loreMatch = searchLore && loreText.contains(searchQuery, ignoreCase = ignoreCaps)
 
             if (nameMatch || loreMatch) {
-                ctx.fill(slot.x, slot.y, slot.x + 16, slot.y + 16, highlightColour.rgb)
+                val c = highlightColour.rgb
+                val bw = borderWidth
+                // Outline drawn OUTSIDE the 16x16 item area (on the slot frame),
+                // so the item icon can't cover it. This is the visible cue.
+                ctx.fill(slot.x - bw, slot.y - bw, slot.x + 16 + bw, slot.y, c)            // top
+                ctx.fill(slot.x - bw, slot.y + 16, slot.x + 16 + bw, slot.y + 16 + bw, c)  // bottom
+                ctx.fill(slot.x - bw, slot.y, slot.x, slot.y + 16, c)                       // left
+                ctx.fill(slot.x + 16, slot.y, slot.x + 16 + bw, slot.y + 16, c)             // right
+                // Faint interior tint (mostly hidden by opaque icons, but peeks
+                // through transparent edges — extra contrast on busy items).
+                if (tintFill) {
+                    ctx.fill(slot.x, slot.y, slot.x + 16, slot.y + 16, (c and 0x00FFFFFF) or 0x40000000)
+                }
             }
         }
 
