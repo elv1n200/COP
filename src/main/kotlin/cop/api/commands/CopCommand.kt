@@ -64,6 +64,8 @@ object CopCommand {
 
             // Phase-1 sanity check for the Auto Croesus price client.
             // Usage: /copdev pricetest <ITEM_ID or display name>
+            // Note: enchantment-book IDs (ENCHANTMENT_X_Y) and reforges aren't in
+            // the items registry — you must pass the full id, e.g. ENCHANTMENT_COMBO_6.
             "pricetest" { query: GreedyString ->
                 val raw = query.string.trim()
                 if (raw.isEmpty()) {
@@ -73,9 +75,8 @@ object CopCommand {
                 val pc = cop.utils.skyblock.PriceClient
                 val ageLabel = if (pc.isLoaded) "${pc.ageMs / 1000}s" else "never"
                 modMessage("&7Fetching prices (cache age=$ageLabel)...")
-                // First the bulk refresh (bazaar + items registry + Moulberry
-                // bulk LBIN as best-effort), then a guaranteed per-item SkyCofl
-                // LBIN lookup so the result is accurate even when Moulberry is dead.
+                // Bulk refresh (bazaar + items registry), then a per-item SkyCofl
+                // LBIN lookup. No more Moulberry — see PriceClient docstring.
                 pc.refreshIfStale {
                     val id = pc.resolveItemId(raw) ?: raw.uppercase().replace(' ', '_')
                     pc.fetchLowestBin(id) { lb ->
@@ -85,9 +86,9 @@ object CopCommand {
                             pc.lastError?.let { modMessage("&eBulk fetch issues: &f$it") }
                             modMessage(
                                 "&bPrice for &f$id&7:" +
-                                    "\n  &7bazaar sell: " + (bz?.let { "&a$it" } ?: "&8n/a") +
-                                    "\n  &7lowest BIN:  " + (lb?.let { "&a$it" } ?: "&8n/a") +
-                                    "\n  &7best:        " + (best?.let { "&e$it" } ?: "&cunknown")
+                                    "\n  &7bazaar sell: " + (bz?.let { "&a${pc.formatPrice(it)}" } ?: "&8n/a") +
+                                    "\n  &7lowest BIN:  " + (lb?.let { "&a${pc.formatPrice(it)}" } ?: "&8n/a") +
+                                    "\n  &7best:        " + (best?.let { "&e${pc.formatPrice(it)}" } ?: "&cunknown")
                             )
                         }
                     }
