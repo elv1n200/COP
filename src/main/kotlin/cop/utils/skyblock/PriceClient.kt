@@ -3,12 +3,13 @@ package cop.utils.skyblock
 import com.google.gson.JsonParser
 import cop.CopMod
 import cop.CopMod.scope
-import cop.utils.WebUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -70,34 +71,50 @@ object PriceClient {
     fun resolveItemId(displayName: String): String? =
         nameToId[displayName.trim().lowercase()]
 
-    /** Kick off an async refresh if the cache is older than [maxAgeMs]. [onDone]
-     *  fires after the refresh finishes (or immediately if the cache is still
-     *  fresh). Callback runs on Dispatchers.IO — schedule UI/chat work via
-     *  `mc.execute { ... }` if you need to touch the main thread. */
+    /** Kick off an async refresh if the cache is older than [maxAgeMs] (set 0 to
+     *  force). [onDone] fires after the refresh finishes (or immediately if the
+     *  cache is still fresh). Callback runs on Dispatchers.IO — schedule UI/chat
+     *  work via `mc.execute { ... }` if you need to touch the main thread. */
     fun refreshIfStale(maxAgeMs: Long = DEFAULT_REFRESH_MS, onDone: (() -> Unit)? = null) {
         if (ageMs < maxAgeMs) { onDone?.invoke(); return }
         scope.launch(Dispatchers.IO) {
             refreshMutex.withLock {
                 if (ageMs < maxAgeMs) return@withLock  // someone else refreshed while we waited
-                runCatching {
-                    fetchBazaar()
-                    fetchLowestBin()
-                    fetchItemRegistry()
-                    lastRefreshedAt = System.currentTimeMillis()
-                    lastError = null
-                }.onFailure {
-                    lastError = it.message ?: it.javaClass.simpleName
-                    CopMod.logger.error("[cop] PriceClient refresh failed", it)
-                }
+                // Each fetch is isolated so one slow/failing endpoint doesn't
+                // wipe out the other two — the cache simply keeps whatever
+                // succeeded. lastError surfaces the most recent failure for diagnosis.
+                val errors = mutableListOf<String>()
+                runCatching { fetchBazaar() }      .onFailure { errors += "bazaar: ${it.message ?: it.javaClass.simpleName}" }
+                runCatching { fetchLowestBin() }   .onFailure { errors += "lbin: ${it.message ?: it.javaClass.simpleName}" }
+                runCatching { fetchItemRegistry() }.onFailure { errors += "items: ${it.message ?: it.javaClass.simpleName}" }
+                val anySucceeded = bazaarSell.isNotEmpty() || lowestBin.isNotEmpty() || nameToId.isNotEmpty()
+                if (anySucceeded) lastRefreshedAt = System.currentTimeMillis()
+                lastError = if (errors.isEmpty()) null else errors.joinToString("; ")
+                if (errors.isNotEmpty()) CopMod.logger.warn("[cop] PriceClient partial: $lastError")
             }
             onDone?.invoke()
         }
     }
 
+    /** Opens a GET with a 20s timeout and a friendly User-Agent — some APIs
+     *  (and CDN edge nodes) reject the default Java/JRE user agent. Avoids the
+     *  shared WebUtils helper because that one defaults to 5s and sets
+     *  setDoOutput(true), which can confuse strict servers about GET vs POST. */
+    private fun openJsonGet(url: String): HttpURLConnection {
+        val conn = URI(url).toURL().openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 20_000
+        conn.setRequestProperty("Accept", "application/json")
+        conn.setRequestProperty("User-Agent", "COP-Mod/1.2.0 (+github.com/elv1n200/COP)")
+        return conn
+    }
+
     private fun fetchBazaar() {
-        WebUtils.setupConnection(URL_BAZAAR).use { stream ->
+        val conn = openJsonGet(URL_BAZAAR)
+        conn.inputStream.use { stream ->
             val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
-            check(root.get("success")?.asBoolean == true) { "bazaar: success=false" }
+            check(root.get("success")?.asBoolean == true) { "success=false" }
             val products = root.getAsJsonObject("products") ?: return
             bazaarSell.clear()
             for ((id, json) in products.entrySet()) {
@@ -109,7 +126,8 @@ object PriceClient {
     }
 
     private fun fetchLowestBin() {
-        WebUtils.setupConnection(URL_LOWESTBIN).use { stream ->
+        val conn = openJsonGet(URL_LOWESTBIN)
+        conn.inputStream.use { stream ->
             val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
             lowestBin.clear()
             for ((id, json) in root.entrySet()) {
@@ -120,9 +138,10 @@ object PriceClient {
     }
 
     private fun fetchItemRegistry() {
-        WebUtils.setupConnection(URL_ITEMS).use { stream ->
+        val conn = openJsonGet(URL_ITEMS)
+        conn.inputStream.use { stream ->
             val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
-            check(root.get("success")?.asBoolean == true) { "items: success=false" }
+            check(root.get("success")?.asBoolean == true) { "success=false" }
             val items = root.getAsJsonArray("items") ?: return
             nameToId.clear()
             for (el in items) {
