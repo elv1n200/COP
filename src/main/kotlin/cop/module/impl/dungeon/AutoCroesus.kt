@@ -42,6 +42,10 @@ object AutoCroesus : Module(
         "Show profit overlay", true,
         desc = "Draw the per-chest cost/value/profit summary in the run sub-screen."
     )
+    private val highlightBest by switch(
+        "Highlight best chest", true,
+        desc = "Prepend a ★ marker to the highest-profit chest in the overlay."
+    )
     private val refreshTicks by slider(
         "Refresh rate", 5, 1, 40, 1,
         desc = "Re-parse the open chest GUI every N ticks (lower = snappier, higher = cheaper).", unit = "t"
@@ -57,9 +61,6 @@ object AutoCroesus : Module(
     /** Sticky containerId snapshot — wipes cache when the user opens a different container. */
     private var cachedContainerId: Int = -1
     private var ticksSinceParse = 0
-    // One-shot diag flags so we don't spam the log every tick / every frame.
-    @Volatile private var loggedParse = false
-    @Volatile private var loggedDraw = false
 
     init {
         // Wipe caches whenever a GUI opens/closes so we never show stale data
@@ -81,33 +82,20 @@ object AutoCroesus : Module(
                 if (cid != cachedContainerId) {
                     lastChests = emptyList()
                     cachedContainerId = cid
-                    // Mark for immediate parse on the next tick. Setting to
-                    // Int.MAX_VALUE was a bug — the ++ below overflowed to
-                    // Int.MIN_VALUE and the threshold check then never fired.
+                    // Mark for immediate parse on the next tick. Use refreshTicks
+                    // (not Int.MAX_VALUE — the ++ below would overflow to MIN_VALUE
+                    // and the threshold check would then never fire).
                     ticksSinceParse = refreshTicks
-                    loggedParse = false
                 }
                 ticksSinceParse++
-                // Belt+suspenders: also parse whenever we have no data yet,
-                // so we never sit in a Croesus run sub-screen with an empty
-                // overlay just because of a counter race.
+                // Also parse whenever we have no data yet, so we never sit in a
+                // Croesus run sub-screen with an empty overlay due to a counter race.
                 if (lastChests.isEmpty() || ticksSinceParse >= refreshTicks) {
                     lastChests = CroesusParser.parseChests(screen.menu)
                     ticksSinceParse = 0
-                    if (!loggedParse) {
-                        loggedParse = true
-                        val ok = lastChests.count { it is ChestParseResult.Success }
-                        val fail = lastChests.count { it is ChestParseResult.Failure }
-                        CopMod.logger.info("[cop][croesus] parsed '${screen.title.string}' -> $ok success, $fail failure (total ${lastChests.size})")
-                        for (r in lastChests) when (r) {
-                            is ChestParseResult.Failure -> CopMod.logger.info("[cop][croesus]   FAIL ${r.tierName}: ${r.reason}")
-                            is ChestParseResult.Success -> CopMod.logger.info("[cop][croesus]   OK   ${r.chest.tierName}: cost=${r.chest.cost} value=${r.chest.totalValue} items=${r.chest.items.size}")
-                        }
-                    }
                 }
             } else if (lastChests.isNotEmpty()) {
                 lastChests = emptyList()
-                loggedParse = false
             }
         }
 
@@ -127,10 +115,6 @@ object AutoCroesus : Module(
             if (!showOverlay) return@on
             val screen = mc.screen as? AbstractContainerScreen<*> ?: return@on
             if (!CroesusParser.inRunMenu(screen)) return@on
-            if (!loggedDraw) {
-                loggedDraw = true
-                CopMod.logger.info("[cop][croesus] Draw.Post hit on '${screen.title.string}', lastChests=${lastChests.size}, showOverlay=$showOverlay")
-            }
             if (lastChests.isEmpty()) return@on
             renderProfitOverlay(ctx)
         }
@@ -169,8 +153,6 @@ object AutoCroesus : Module(
         lastChests = emptyList()
         cachedContainerId = -1
         ticksSinceParse = 0
-        loggedParse = false
-        loggedDraw = false
     }
 
     private fun drawSlotOutline(ctx: GuiGraphics, x: Int, y: Int, colour: Int, bw: Int) {
@@ -180,19 +162,29 @@ object AutoCroesus : Module(
         ctx.fill(x + 16, y, x + 16 + bw, y + 16, colour)             // right
     }
 
-    /** Top-left overlay: one block per chest with cost/value/profit. */
+    /** Top-left overlay: one block per chest with cost/value/profit.
+     *  Highest-profit chest gets a ★ prefix so the player can see at a glance
+     *  which one to open. Computed once across all successful parses; ties
+     *  resolve to the first match (deterministic across frames). */
     private fun renderProfitOverlay(ctx: GuiGraphics) {
         val font = mc.font
         val x = 4
         var y = 4
+        val bestSlot = if (highlightBest) {
+            lastChests
+                .filterIsInstance<ChestParseResult.Success>()
+                .maxByOrNull { it.chest.profit }
+                ?.chest?.slot
+        } else null
         val lines = buildList<Component> {
             for (result in lastChests) {
                 when (result) {
                     is ChestParseResult.Success -> {
                         val c = result.chest
                         val profitColour = if (c.profit >= 0) "§a+" else "§c"
+                        val marker = if (c.slot == bestSlot) "§e§l★ " else "  "
                         add(Component.literal(
-                            "${c.tierColourCode}${c.tierName} Chest §7(${PriceClient.formatPrice(c.cost)}) " +
+                            "$marker${c.tierColourCode}${c.tierName} Chest §7(${PriceClient.formatPrice(c.cost)}) " +
                                 "$profitColour${PriceClient.formatPrice(c.profit)}"
                         ))
                         for (item in c.items.take(6)) {
@@ -201,13 +193,13 @@ object AutoCroesus : Module(
                             // Strip the legacy "§5§o" prefix Hypixel slaps on every
                             // lore line for italic formatting — looks bad in overlay.
                             val name = item.displayName.removePrefix("§5§o")
-                            add(Component.literal("  $name $vColour${PriceClient.formatPrice(v)}"))
+                            add(Component.literal("    $name $vColour${PriceClient.formatPrice(v)}"))
                         }
-                        if (c.items.size > 6) add(Component.literal("  §7… +${c.items.size - 6} more"))
+                        if (c.items.size > 6) add(Component.literal("    §7… +${c.items.size - 6} more"))
                         add(Component.literal(""))  // blank separator
                     }
                     is ChestParseResult.Failure -> {
-                        add(Component.literal("§c${result.tierName} Chest §7(${result.reason})"))
+                        add(Component.literal("  §c${result.tierName} Chest §7(${result.reason})"))
                         add(Component.literal(""))
                     }
                 }
