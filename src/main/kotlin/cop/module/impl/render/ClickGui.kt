@@ -308,20 +308,25 @@ object ClickGui : Module(
         val height = Animatable(from = Bounding, to = 0.px, swapIf = !expanded)
 
         block(
-            size(Copying, 20.px),
-            colour = colour { theme.surface.withAlpha(0.55f).rgb },
+            size(Copying, 22.px),
+            // More opaque so the header is clearly visible against the
+            // scrollable background (which itself is theme.surface @ 0.7).
+            colour = colour { theme.surfaceVariant.rgb },
         ) {
+            tonalHover()
             text(
                 string = sub.replaceFirstChar { it.uppercase() },
-                size = 12.px,
-                colour = theme.onSurfaceVariant,
+                size = 13.px,
+                colour = theme.onSurface,
             )
-            // Click anywhere on the sub-header to toggle. We use left-click
-            // (button = 0) since right-click on the parent column is reserved
-            // for category drag/collapse.
-            onClick {
+            // Left-click to toggle. Right-click on the parent column is
+            // reserved for category drag + collapse. We mirror the main
+            // category header's pattern exactly so we don't hit a different
+            // code path on the AbobaUI side: element.redraw() + Animatable
+            // height.animate() + persist on `data`.
+            onClick(button = 0) {
                 height.animate(0.2.seconds, style = Animation.Style.EaseInOutQuint)
-                redraw()
+                element.redraw()
                 data.toggleSubExpanded(sub)
                 true
             }
