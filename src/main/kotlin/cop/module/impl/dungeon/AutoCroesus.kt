@@ -10,13 +10,17 @@ import cop.api.skyblock.croesus.ChestParseResult
 import cop.api.skyblock.croesus.CroesusParser
 import cop.module.Module
 import cop.utils.ChatUtils.modMessage
+import cop.utils.EntityUtils
 import cop.utils.StringUtils.formattedString
 import cop.utils.skyblock.PriceClient
 import cop.utils.skyblock.player.ContainerUtils
+import cop.utils.skyblock.player.interact.AuraAction
+import cop.utils.skyblock.player.interact.AuraManager
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.core.component.DataComponents
 import net.minecraft.network.chat.Component
+import net.minecraft.world.entity.Entity
 
 /**
  * Auto Croesus — Phase 3c (multi-run auto-claim).
@@ -149,6 +153,11 @@ object AutoCroesus : Module(
     private var multiRunChestsThisCycle = 0
     /** Total runs visited during the current multi-run cycle. */
     private var multiRunRunsThisCycle = 0
+    /** First tick at which mc.screen was observed null while in AWAIT_AFTER_BUY.
+     *  After buying, Hypixel fully closes the menu — no replacement screen
+     *  opens — so we need a tick-based detector instead of waiting on Open.
+     *  0 means "not currently tracking". */
+    private var noScreenSinceTick = 0L
 
     init {
         // Wipe parser cache whenever a GUI opens/closes — stale data from the
@@ -189,6 +198,25 @@ object AutoCroesus : Module(
             if (claimState != ClaimState.IDLE && monotonicTick >= claimDeadlineTick) {
                 modMessage("&cAutoCroesus: timeout (state=$claimState) — aborting.")
                 resetCycle()
+            }
+
+            // After a successful buy in multi-run mode, Hypixel doesn't open
+            // any replacement screen — it just closes everything. Detect this
+            // by watching mc.screen stay null for a few ticks, then trigger
+            // the Croesus NPC re-interaction.
+            if (claimState == ClaimState.AWAIT_AFTER_BUY && multiRun) {
+                if (mc.screen == null) {
+                    if (noScreenSinceTick == 0L) noScreenSinceTick = monotonicTick
+                    else if (monotonicTick - noScreenSinceTick >= 10L) {
+                        // ~500ms with no screen = menu fully closed.
+                        noScreenSinceTick = 0L
+                        tryReopenCroesus()
+                    }
+                } else {
+                    noScreenSinceTick = 0L
+                }
+            } else {
+                noScreenSinceTick = 0L
             }
 
             val screen = mc.screen as? AbstractContainerScreen<*>
@@ -336,12 +364,18 @@ object AutoCroesus : Module(
         }
     }
 
-    /** Multi-run, post-buy. The buy-confirm has closed; Hypixel either drops
-     *  us back into the run sub-screen (most likely) or directly into the
-     *  Croesus list. Handle both. */
+    /** Multi-run, post-buy. The buy-confirm has closed; Hypixel may:
+     *    - drop us back into the run sub-screen,
+     *    - go directly to the Croesus list,
+     *    - close everything entirely (most common — handled by the TickEvent
+     *      "no screen for 10 ticks" detector, which calls [tryReopenCroesus]).
+     *
+     *  Non-container screens (chat, pause menu, etc.) are ignored — the
+     *  tick detector handles cleanup. */
     private fun handleAfterBuyOpen(screen: net.minecraft.client.gui.screens.Screen) {
+        val containerScreen = screen as? AbstractContainerScreen<*> ?: return
         when {
-            CroesusParser.inRunMenu(screen) -> {
+            CroesusParser.inRunMenu(containerScreen) -> {
                 if (chainClaim) {
                     // Try to chain in the same run first (Dungeon Chest Keys
                     // case). If the next-best chest is below threshold the
@@ -353,13 +387,13 @@ object AutoCroesus : Module(
                     clickGoBackToList()
                 }
             }
-            CroesusParser.inCroesusMenu(screen) -> {
-                // Server skipped the run sub-screen; go straight to next run.
-                tryClickNextRun(screen as AbstractContainerScreen<*>)
+            CroesusParser.inCroesusMenu(containerScreen) -> {
+                // Server skipped the close phase; go straight to next run.
+                tryClickNextRun(containerScreen)
             }
             else -> {
-                val title = (screen as? AbstractContainerScreen<*>)?.title?.string ?: "?"
-                modMessage("&cAutoCroesus: aborted after buy — unexpected screen \"$title\".")
+                modMessage("&cAutoCroesus: aborted after buy — unexpected container \"" +
+                    "${containerScreen.title.string}\".")
                 resetCycle()
             }
         }
@@ -408,6 +442,49 @@ object AutoCroesus : Module(
         chainClaimsThisCycle = 0
         multiRunChestsThisCycle = 0
         multiRunRunsThisCycle = 0
+        noScreenSinceTick = 0L
+    }
+
+    /** Try to reopen the Croesus menu by interacting with the nearby NPC
+     *  entity. Called from the TickEvent detector when the menu has been
+     *  fully closed for ~500ms post-buy. */
+    private fun tryReopenCroesus() {
+        val entity = findCroesusEntity()
+        if (entity == null) {
+            modMessage(
+                "&aMulti-run complete — bought &f$multiRunChestsThisCycle&a chest" +
+                    (if (multiRunChestsThisCycle == 1) "" else "s") + " across " +
+                    "&f$multiRunRunsThisCycle&a run" +
+                    (if (multiRunRunsThisCycle == 1) "" else "s") +
+                    "; can't find Croesus NPC within 6 blocks to continue."
+            )
+            resetCycle()
+            return
+        }
+        AuraManager.interactEntity(entity, AuraAction.INTERACT_AT)
+        // Hand off to AWAIT_CROESUS_LIST — when the menu reopens, the list
+        // handler picks the next unclaimed run automatically.
+        claimState = ClaimState.AWAIT_CROESUS_LIST
+        // Triple the timeout — entity interaction has its own ~1t cooldown
+        // and the server can take a moment to push the menu back.
+        claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 3).toLong()
+    }
+
+    /** Find the nearest entity within 6 blocks whose custom name or hover
+     *  name contains "Croesus". Returns null if no such entity is in range —
+     *  the player may have walked away. */
+    private fun findCroesusEntity(): Entity? {
+        val player = mc.player ?: return null
+        val playerPos = player.position()
+        return EntityUtils.getEntities()
+            .filter { e ->
+                if (e === player) return@filter false
+                if (e.position().distanceTo(playerPos) > 6.0) return@filter false
+                val custom = e.customName?.string ?: ""
+                val hover = e.name.string  // Entity.getName() never returns null
+                "Croesus" in custom || "Croesus" in hover
+            }
+            .minByOrNull { it.position().distanceTo(playerPos) }
     }
 
     /** Kick off a multi-run cycle from the Croesus list. Validates and then
