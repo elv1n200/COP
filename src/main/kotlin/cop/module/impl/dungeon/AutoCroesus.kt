@@ -7,6 +7,7 @@ import cop.api.events.TickEvent
 import cop.api.input.CatKeys
 import cop.api.skyblock.croesus.ChestInfo
 import cop.api.skyblock.croesus.ChestParseResult
+import cop.api.skyblock.croesus.CroesusLists
 import cop.api.skyblock.croesus.CroesusLootLog
 import cop.api.skyblock.croesus.CroesusParser
 import cop.module.Module
@@ -25,7 +26,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.Entity
 
 /**
- * Auto Croesus — Phase 5 (loot log layered on the full auto-claim driver).
+ * Auto Croesus — Phase 6 (always-buy / worthless lists on top of the full driver).
  *
  *  - Highlights unclaimed runs on the top-level Croesus screen (Phase 2).
  *  - On a run sub-screen, draws an overlay listing each chest tier with cost,
@@ -45,10 +46,15 @@ import net.minecraft.world.entity.Entity
  *  - **Phase 5:** Every successful buy persists a [CroesusLootLog.LootEntry]
  *    to `config/cop/croesus-loot.jsonl`. Summarised by the `/cop loot`
  *    command (today / week / all) with per-tier breakdown and top items.
+ *  - **Phase 6:** [CroesusLists] — two persisted skyblock-id lists.
+ *      • Always-buy: chests containing any listed item are claimed even if
+ *        profit is below [minProfit] (managed via `/cop alwaysbuy`).
+ *      • Worthless: items the price model values at 0 when computing chest
+ *        profit (managed via `/cop worthless`). Useful for HPB, Fuming, etc.
+ *        when you've already capped out.
  *
- * No pagination, no always-buy / worthless lists yet — saved for 3d / 6.
- * Master kill switch [autoClaim] defaults OFF so the keybind is inert until
- * the user explicitly opts in.
+ * No pagination yet — saved for 3d. Master kill switch [autoClaim] defaults
+ * OFF so the keybind is inert until the user explicitly opts in.
  */
 object AutoCroesus : Module(
     "Auto Croesus",
@@ -850,20 +856,32 @@ object AutoCroesus : Module(
         }
         // Filter out chests we've already attempted (failed reroll + skip)
         // so chainClaim / multiRun don't pick the same slot forever.
-        val best: ChestInfo? = lastChests
+        val candidates = lastChests
             .filterIsInstance<ChestParseResult.Success>()
-            .filter { it.chest.slot !in exhaustedSlotsThisRun }
-            .maxByOrNull { it.chest.profit }
-            ?.chest
-        if (best == null) {
+            .map { it.chest }
+            .filter { it.slot !in exhaustedSlotsThisRun }
+        if (candidates.isEmpty()) {
             if (!fromChain) modMessage("&cAutoCroesus: no chests parsed yet — wait a moment for the overlay.")
             return
         }
+        // Phase 6: if any chest contains an always-buy item, prefer it. We
+        // still pick the highest-profit among always-buy chests so that
+        // multiple-tier overlaps don't pick the worst one. If no chest
+        // contains an always-buy item, fall back to best-by-profit overall.
+        val alwaysBuyChests = candidates.filter { CroesusLists.chestHasAlwaysBuy(it.items) }
+        val pool = if (alwaysBuyChests.isNotEmpty()) alwaysBuyChests else candidates
+        val best: ChestInfo = pool.maxByOrNull { it.profit }!!
+        val isAlwaysBuyChest = alwaysBuyChests.isNotEmpty()
+
         // Speculative-enter for kismet: if profit is below minProfit BUT we
         // have a kismet armed and the chest is also below rerollThreshold,
         // enter anyway to try the reroll.
         val canKismetUpgrade = useKismet && hasKismetFeather() && best.profit < rerollThreshold
-        val canEnterBuyConfirm = best.profit >= minProfit || canKismetUpgrade
+        // Phase 6: always-buy chests bypass the profit gate entirely — the
+        // user said "claim this no matter what". They still respect kismet
+        // (we still try to upgrade the chest if useKismet is on) but the
+        // claim itself isn't blocked by minProfit.
+        val canEnterBuyConfirm = isAlwaysBuyChest || best.profit >= minProfit || canKismetUpgrade
         if (!canEnterBuyConfirm) {
             if (fromChain) {
                 if (multiRun) {
@@ -912,12 +930,14 @@ object AutoCroesus : Module(
         // run-sub-screen data we just used to pick this chest is the same
         // data the buy-confirm would parse, so it's a safe fallback.
         pendingChestInfo = best
-        val msg = if (best.profit < minProfit) {
-            // Entered speculatively for the kismet upgrade path.
-            "&dAutoCroesus: opening ★ &r$pendingTier&d chest to try a kismet upgrade " +
+        val msg = when {
+            // Always-buy chests get their own colour so the user knows we
+            // overrode the profit gate.
+            isAlwaysBuyChest -> "&6★ AutoCroesus: claiming &r$pendingTier&6 chest " +
+                "&7(always-buy item present, profit ${PriceClient.formatPrice(best.profit)})."
+            best.profit < minProfit -> "&dAutoCroesus: opening ★ &r$pendingTier&d chest to try a kismet upgrade " +
                 "&7(profit ${PriceClient.formatPrice(best.profit)})."
-        } else {
-            "&aAutoCroesus: claiming ★ &r$pendingTier&a chest " +
+            else -> "&aAutoCroesus: claiming ★ &r$pendingTier&a chest " +
                 "&7(profit ${PriceClient.formatPrice(best.profit)})."
         }
         modMessage(msg)

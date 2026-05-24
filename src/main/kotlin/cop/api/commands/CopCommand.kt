@@ -327,6 +327,21 @@ object CopCommand {
                 modMessage(lines.joinToString("\n"))
             }.suggests("windowArg", "today", "week", "all", "reset")
                 .description("Auto Croesus loot summary. Window: today (default), week, all, reset.")
+
+            // Phase 6: persisted skyblock-id lists that shape the auto-claim
+            // driver's decisions. Same command shape for both lists; just
+            // differs in which MutableList<String> we mutate.
+            "alwaysbuy" { actionArg: String?, idArg: GreedyString? ->
+                lootListCommand("alwaysbuy", cop.api.skyblock.croesus.CroesusLists.alwaysBuy, actionArg, idArg)
+            }.suggests("actionArg", "list", "add", "remove", "clear")
+                .description("Skyblock IDs the driver claims regardless of profit threshold. " +
+                    "Subcommands: list (default), add <ID>, remove <ID>, clear.")
+
+            "worthless" { actionArg: String?, idArg: GreedyString? ->
+                lootListCommand("worthless", cop.api.skyblock.croesus.CroesusLists.worthless, actionArg, idArg)
+            }.suggests("actionArg", "list", "add", "remove", "clear")
+                .description("Skyblock IDs the price model values at 0 when computing chest profit. " +
+                    "Subcommands: list (default), add <ID>, remove <ID>, clear.")
         }
 
         command.sub("findlobby") { area: String, criteria: String, value: String ->
@@ -386,6 +401,52 @@ object CopCommand {
                 if (ticker.tick()) ticker = antiAfkTicker(delay)
             }
         }.description("Prevents afk kick.").suggests("delay", "40")
+    }
+
+    /** Shared dispatch for the Phase 6 always-buy / worthless list commands.
+     *  Both lists have identical shape: list (default), add <ID>, remove <ID>,
+     *  clear. IDs are stored uppercase + trimmed for case-insensitive match. */
+    private fun lootListCommand(
+        label: String,
+        list: MutableList<String>,
+        actionArg: String?,
+        idArg: GreedyString?,
+    ) {
+        val action = (actionArg ?: "list").lowercase()
+        when (action) {
+            "list" -> {
+                if (list.isEmpty()) {
+                    modMessage("&7Croesus $label list is empty.")
+                } else {
+                    modMessage("&6Croesus $label list &7(${list.size}):&r\n  &7" +
+                        list.joinToString("\n  &7"))
+                }
+            }
+            "add" -> {
+                val id = idArg?.string?.trim()?.uppercase()?.replace(' ', '_')
+                if (id.isNullOrEmpty()) {
+                    modMessage("&cUsage: /cop $label add <SKYBLOCK_ID>")
+                    return
+                }
+                if (id in list) modMessage("&7$id is already in the $label list.")
+                else { list.add(id); modMessage("&aAdded &f$id&a to the $label list (${list.size} total).") }
+            }
+            "remove", "rm", "delete" -> {
+                val id = idArg?.string?.trim()?.uppercase()?.replace(' ', '_')
+                if (id.isNullOrEmpty()) {
+                    modMessage("&cUsage: /cop $label remove <SKYBLOCK_ID>")
+                    return
+                }
+                if (list.remove(id)) modMessage("&aRemoved &f$id&a from the $label list.")
+                else modMessage("&7$id wasn't in the $label list.")
+            }
+            "clear" -> {
+                val n = list.size
+                list.clear()
+                modMessage("&aCleared &f$n&a entries from the $label list.")
+            }
+            else -> modMessage("&cUnknown action '$action'. Use list / add <ID> / remove <ID> / clear.")
+        }
     }
 
     fun init() {

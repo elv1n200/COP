@@ -235,8 +235,14 @@ object CroesusParser {
     /** Single source of truth for converting an item id to its sell value.
      *  Enchant books use [PriceClient.getEnchantBookPrice] so the smart
      *  ULTIMATE_ fallback kicks in for cases like "Bank" / "Wisdom" where the
-     *  plain-text lore doesn't mark them as ultimate but the bazaar id does. */
+     *  plain-text lore doesn't mark them as ultimate but the bazaar id does.
+     *
+     *  Phase 6 hook: items the user flagged worthless via [CroesusLists] are
+     *  treated as zero — the bazaar / AH still has a price but the player
+     *  isn't going to bother selling it, so it shouldn't inflate chest
+     *  profit calculations. */
     private fun priceFor(id: String): Double {
+        if (CroesusLists.isWorthless(id)) return 0.0
         if (id.startsWith("ENCHANTMENT_")) {
             // Split "ENCHANTMENT_<NAME>_<LEVEL>" to feed into getEnchantBookPrice's
             // smart lookup — that handles both ENCHANTMENT_BANK_1 -> tries
