@@ -159,6 +159,15 @@ object AutoCroesus : Module(
      *  0 means "not currently tracking". */
     private var noScreenSinceTick = 0L
 
+    /** First tick at which the Croesus list was observed populated (slot 4
+     *  + slot 49 non-empty). We wait an additional [CROESUS_SYNC_DELAY_TICKS]
+     *  after that before clicking — Hypixel pushes slot data asynchronously
+     *  and rejects clicks whose lastStateId is behind the server's, refreshing
+     *  the menu back at us instead of opening the run. 0 means "not yet
+     *  populated". */
+    private var croesusReadyAtTick = 0L
+    private val CROESUS_SYNC_DELAY_TICKS = 10L
+
     init {
         // Wipe parser cache whenever a GUI opens/closes — stale data from the
         // previous run would otherwise leak into the next overlay.
@@ -227,20 +236,30 @@ object AutoCroesus : Module(
             // opens are instant (cached for 30 min).
             PriceClient.refreshIfStale()
 
-            // Multi-run polling: in AWAIT_CROESUS_LIST, retry the unclaimed
-            // scan each tick until either (a) we find an unclaimed run to
-            // click, or (b) slot data has fully loaded but there are none
-            // left. Slot 4 (the Croesus info icon) being non-empty is the
-            // signal that Hypixel has finished sending slot updates.
+            // Multi-run polling: in AWAIT_CROESUS_LIST, wait for the menu to
+            // fully populate, then wait CROESUS_SYNC_DELAY_TICKS extra ticks
+            // so Hypixel's lastStateId is current before we click — otherwise
+            // the server rejects our click and refreshes the menu at us
+            // instead of opening the run sub-screen.
             if (claimState == ClaimState.AWAIT_CROESUS_LIST &&
                 CroesusParser.inCroesusMenu(screen)) {
-                val unclaimed = CroesusParser.findUnclaimedRunSlots(screen.menu)
-                if (unclaimed.isNotEmpty()) {
-                    clickUnclaimedRun(unclaimed.first())
+                val slot4 = screen.menu.slots.getOrNull(4)?.item?.isEmpty == false
+                val slot49 = screen.menu.slots.getOrNull(49)?.item?.isEmpty == false
+                val populated = slot4 && slot49
+                if (populated) {
+                    if (croesusReadyAtTick == 0L) croesusReadyAtTick = monotonicTick
+                    if (monotonicTick - croesusReadyAtTick >= CROESUS_SYNC_DELAY_TICKS) {
+                        val unclaimed = CroesusParser.findUnclaimedRunSlots(screen.menu)
+                        if (unclaimed.isNotEmpty()) {
+                            clickUnclaimedRun(unclaimed.first())
+                        } else {
+                            completeMultiRun()
+                        }
+                        croesusReadyAtTick = 0L
+                    }
                 } else {
-                    val populated = screen.menu.slots.getOrNull(4)?.item?.isEmpty == false
-                    if (populated) completeMultiRun()
-                    // else: keep polling — slots still loading
+                    // Slot data still arriving — reset and keep waiting.
+                    croesusReadyAtTick = 0L
                 }
             }
 
@@ -468,6 +487,7 @@ object AutoCroesus : Module(
         multiRunChestsThisCycle = 0
         multiRunRunsThisCycle = 0
         noScreenSinceTick = 0L
+        croesusReadyAtTick = 0L
     }
 
     /** Try to reopen the Croesus menu by interacting with the nearby NPC
