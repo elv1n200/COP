@@ -140,18 +140,13 @@ object CroesusParser {
         lorePlain: List<String>,
         loreFormatted: List<String>,
     ): ChestParseResult {
-        // Hypixel's chest tooltip layout:
-        //   line 0..2:  header lines (chest name, separator, etc)
-        //   item lines: one per loot entry (e.g. "Enchanted Diamond x16")
-        //   blank line
-        //   "Cost"  ← header
-        //   "<X> Coins"  or  "FREE"
-        //   ... more lines after (modifiers, footer, etc)
-        //
-        // We find the "Cost" header by plain text, then take everything between
-        // it (working backwards through blank lines) and an earlier blank line
-        // as the loot section. This is more robust to layout changes than the
-        // old fixed-index slicing.
+        // Verified by /copdev croesusdump — Hypixel's chest tooltip is rigid:
+        //   lore[0]            = "Contents"
+        //   lore[1..N]         = one line per item
+        //   lore[N+1]          = ""  (blank separator)
+        //   lore[N+2]          = "Cost"
+        //   lore[N+3]          = "<X> Coins"  or  "FREE"
+        //   ... NOTE / footer lines after, ignored
         val costIdx = lorePlain.indexOfFirst { it.trim() == "Cost" }
         if (costIdx < 0 || costIdx + 1 >= lorePlain.size) {
             return ChestParseResult.Failure(tierName, "no Cost marker in lore")
@@ -160,28 +155,28 @@ object CroesusParser {
         val cost = parseCost(costLine)
             ?: return ChestParseResult.Failure(tierName, "unparseable cost: \"$costLine\"")
 
-        // Walk backwards from the line above "Cost" — skip the blank separator,
-        // then collect non-blank lines until we hit another blank or the top.
-        val lootEnd = (costIdx - 1).coerceAtLeast(0)
-        var firstLoot = lootEnd
-        while (firstLoot > 0 && lorePlain[firstLoot].isNotBlank()) firstLoot--
-        // firstLoot is now either 0 or sitting on a blank line; start one past it.
-        if (lorePlain[firstLoot].isBlank()) firstLoot++
+        // The blank line right before "Cost" separates loot from cost section.
+        val blankIdx = costIdx - 1
+        if (blankIdx < 1 || lorePlain[blankIdx].isNotBlank()) {
+            return ChestParseResult.Failure(tierName, "no blank separator before Cost (idx=$blankIdx)")
+        }
+        val lastItem = blankIdx - 1
+        // lore[0] is always "Contents" — items start at lore[1].
+        val firstItem = 1
+        if (firstItem > lastItem) {
+            // Chest with no items (shouldn't happen but guard anyway).
+            return ChestParseResult.Success(ChestInfo(slot, tierName, colourCode, cost, emptyList(), 0.0))
+        }
 
         val items = mutableListOf<RewardItem>()
         var totalValue = 0.0
-        for (i in firstLoot until lootEnd + 1) {
+        for (i in firstItem..lastItem) {
             val plain = lorePlain.getOrNull(i)?.trim() ?: continue
             if (plain.isEmpty()) continue
             val formatted = loreFormatted.getOrNull(i) ?: plain
             val (id, qty) = tryParseLine(plain, formatted)
                 ?: return ChestParseResult.Failure(tierName, "unparseable line: \"$plain\"")
-            val price = PriceClient.getBazaarSell(id)
-                ?: PriceClient.getLowestBin(id)
-                ?: 0.0  // unknown -> treat as 0 (we still warm the LBIN cache below)
-            if (PriceClient.getLowestBin(id) == null && PriceClient.getBazaarSell(id) == null) {
-                PriceClient.ensureLowestBin(id)
-            }
+            val price = priceFor(id)
             items += RewardItem(id, qty, price, formatted)
             totalValue += price * qty
         }
@@ -189,6 +184,31 @@ object CroesusParser {
         return ChestParseResult.Success(
             ChestInfo(slot, tierName, colourCode, cost, sorted, totalValue)
         )
+    }
+
+    /** Single source of truth for converting an item id to its sell value.
+     *  Enchant books use [PriceClient.getEnchantBookPrice] so the smart
+     *  ULTIMATE_ fallback kicks in for cases like "Bank" / "Wisdom" where the
+     *  plain-text lore doesn't mark them as ultimate but the bazaar id does. */
+    private fun priceFor(id: String): Double {
+        if (id.startsWith("ENCHANTMENT_")) {
+            // Split "ENCHANTMENT_<NAME>_<LEVEL>" to feed into getEnchantBookPrice's
+            // smart lookup — that handles both ENCHANTMENT_BANK_1 -> tries
+            // ENCHANTMENT_ULTIMATE_BANK_1 and ENCHANTMENT_ULTIMATE_COMBO_5.
+            val rest = id.removePrefix("ENCHANTMENT_").removePrefix("ULTIMATE_")
+            val lastUnderscore = rest.lastIndexOf('_')
+            if (lastUnderscore > 0) {
+                val name = rest.substring(0, lastUnderscore)
+                val lvl = rest.substring(lastUnderscore + 1).toIntOrNull() ?: 1
+                PriceClient.getEnchantBookPrice(name, lvl)?.let { return it }
+            }
+        }
+        PriceClient.getBazaarSell(id)?.let { return it }
+        PriceClient.getLowestBin(id)?.let { return it }
+        // Warm the per-item LBIN cache so subsequent overlay frames get a real
+        // number — first call returns 0, the fetch finishes within ~200ms.
+        PriceClient.ensureLowestBin(id)
+        return 0.0
     }
 
     private fun parseCost(line: String): Double? {
