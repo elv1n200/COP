@@ -29,11 +29,14 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object PriceClient {
     private const val URL_BAZAAR        = "https://api.hypixel.net/skyblock/bazaar"
-    private const val URL_LOWESTBIN     = "https://moulberry.codes/lowestbin.json"
     private const val URL_ITEMS         = "https://api.hypixel.net/v2/resources/skyblock/items"
-    /** Per-item SkyCofl BIN endpoint — used as the primary LBIN source because
-     *  Moulberry's bulk endpoint is intermittently dead. Returns a JSON array of
-     *  all active BIN auctions for the given tag; lowest BIN = min(startingBid/count). */
+    /** Per-item SkyCofl BIN endpoint — primary (and now sole) LBIN source.
+     *  Moulberry's bulk lowestbin.json was dropped: it's been intermittently
+     *  dead for a long time and the noise outweighed any benefit. SkyCofl is
+     *  per-item (~200ms each) but caches per-id with a TTL, so a Croesus run's
+     *  ~5 unique items per chest is well inside acceptable latency.
+     *  Returns a JSON array of all active BIN auctions for the given tag;
+     *  lowest BIN per unit = min(startingBid / count). */
     private const val URL_SKYCOFL_BIN_F = "https://sky.coflnet.com/api/auctions/tag/%s/active/bin"
 
     /** Default cache lifetime for the bulk sources (Bazaar + items registry +
@@ -76,9 +79,28 @@ object PriceClient {
     fun getLowestBin(itemId: String): Double? = lowestBin[itemId]
 
     /** "Hyperion" -> "HYPERION" (via the Hypixel items registry). Case- and
-     *  whitespace-insensitive. Returns null if no exact match. */
+     *  whitespace-insensitive. Returns null if no exact match.
+     *
+     *  Note: the items registry only contains *base* items (Enchanted Book, Hyperion,
+     *  Aspect of the Dragons, ...). Enchantment-book IDs like ENCHANTMENT_COMBO_6 or
+     *  reforges aren't in the registry — callers that need those must build the
+     *  id themselves from the Skyblock enchantments NBT. */
     fun resolveItemId(displayName: String): String? =
         nameToId[displayName.trim().lowercase()]
+
+    /** Human-readable price, the way Hypixel itself shows coins. Comma-grouped
+     *  integers for anything below 1M, then 1.23M / 1.23B / 1.23T for larger
+     *  amounts so chest profits don't fill the screen with digits.
+     *  e.g. 1341.09 -> "1,341"; 505_000_000.0 -> "505M"; 12_345_678.0 -> "12.35M". */
+    fun formatPrice(price: Double): String {
+        val abs = kotlin.math.abs(price)
+        return when {
+            abs >= 1_000_000_000_000.0 -> "%.2fT".format(price / 1_000_000_000_000.0)
+            abs >= 1_000_000_000.0     -> "%.2fB".format(price / 1_000_000_000.0)
+            abs >= 1_000_000.0         -> "%.2fM".format(price / 1_000_000.0)
+            else                       -> "%,d".format(price.toLong())
+        }
+    }
 
     /** Best-effort: ensure this item's LBIN is fresh in cache. Fire-and-forget;
      *  if data is older than [LBIN_TTL_MS] (or missing entirely), kicks off a
@@ -136,14 +158,14 @@ object PriceClient {
         scope.launch(Dispatchers.IO) {
             refreshMutex.withLock {
                 if (ageMs < maxAgeMs) return@withLock  // someone else refreshed while we waited
-                // Each fetch is isolated so one slow/failing endpoint doesn't
-                // wipe out the other two — the cache simply keeps whatever
-                // succeeded. lastError surfaces the most recent failure for diagnosis.
+                // Bulk sources: bazaar prices + the items registry (display-name
+                // -> id). LBIN is handled per-item via SkyCofl on demand; there
+                // is no bulk LBIN source any more. Each fetch is isolated so a
+                // single slow/failing endpoint doesn't blow away the other.
                 val errors = mutableListOf<String>()
                 runCatching { fetchBazaar() }      .onFailure { errors += "bazaar: ${it.message ?: it.javaClass.simpleName}" }
-                runCatching { fetchLowestBin() }   .onFailure { errors += "lbin: ${it.message ?: it.javaClass.simpleName}" }
                 runCatching { fetchItemRegistry() }.onFailure { errors += "items: ${it.message ?: it.javaClass.simpleName}" }
-                val anySucceeded = bazaarSell.isNotEmpty() || lowestBin.isNotEmpty() || nameToId.isNotEmpty()
+                val anySucceeded = bazaarSell.isNotEmpty() || nameToId.isNotEmpty()
                 if (anySucceeded) lastRefreshedAt = System.currentTimeMillis()
                 lastError = if (errors.isEmpty()) null else errors.joinToString("; ")
                 if (errors.isNotEmpty()) CopMod.logger.warn("[cop] PriceClient partial: $lastError")
@@ -177,29 +199,6 @@ object PriceClient {
                 val qs = json.asJsonObject.getAsJsonObject("quick_status") ?: continue
                 val sell = qs.get("sellPrice")?.asDouble ?: continue
                 if (sell > 0) bazaarSell[id] = sell
-            }
-        }
-    }
-
-    /** Moulberry's bulk lowestbin.json. Often dead (HTTP 522) — we treat it as
-     *  best-effort: a successful fetch warms the LBIN cache for thousands of
-     *  items at once, but per-item SkyCofl fetches are the primary source so
-     *  Moulberry's flakiness can't block Auto Croesus.
-     *
-     *  Critically, this does NOT clear the cache up-front — Moulberry's bulk
-     *  data merges with whatever per-item SkyCofl fetches have already loaded,
-     *  and a failure leaves the existing per-item entries intact. */
-    private fun fetchLowestBin() {
-        val conn = openJsonGet(URL_LOWESTBIN)
-        conn.inputStream.use { stream ->
-            val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
-            val now = System.currentTimeMillis()
-            for ((id, json) in root.entrySet()) {
-                val price = json.asDouble
-                if (price > 0) {
-                    lowestBin[id] = price
-                    lowestBinFetchedAt[id] = now
-                }
             }
         }
     }
