@@ -106,89 +106,28 @@ object PriceClient {
     }
 
     // --- Enchant book pricing ----------------------------------------------
-    // Enchant books on the AH are auctioned under the tag ENCHANTED_BOOK with
-    // an Enchantment + EnchantLvl filter — there is no `ENCHANTMENT_COMBO_5`
-    // tag on SkyCofl (or anywhere else). SkyCofl uses the NBT-equivalent enchant
-    // name in UPPERCASE, including the `ULTIMATE_` prefix for ultimate enchants
-    // (Combo, Wise, ...), e.g. `ULTIMATE_COMBO`, `SHARPNESS`, `GROWTH`. NBT keys
-    // are lowercase, so converting is just nbtKey.uppercase().
+    // Enchant books are on the BAZAAR (not the AH) with ids of the shape
+    // `ENCHANTMENT_<NAME>_<LEVEL>`. Ultimate enchants keep the `ULTIMATE_`
+    // prefix baked into the name (e.g. ENCHANTMENT_ULTIMATE_COMBO_5). NBT keys
+    // already include that prefix (`ultimate_combo: 5`), so building the bazaar
+    // id is just `"ENCHANTMENT_${nbtKey.uppercase()}_$level"`. We don't need a
+    // separate cache, separate fetch, or any AH path — the bulk bazaar refresh
+    // already has all 762 of them populated as soon as it runs.
 
-    private const val URL_SKYCOFL_BOOK_F =
-        "https://sky.coflnet.com/api/auctions/tag/ENCHANTED_BOOK/active/bin?Enchantment=%s&EnchantLvl=%d"
-
-    private val bookLowestBin = ConcurrentHashMap<String, Double>()  // "NAME:LVL" -> LBIN
-    private val bookFetchedAt = ConcurrentHashMap<String, Long>()
-    private val bookInFlight  = ConcurrentHashMap.newKeySet<String>()
-
-    private fun bookKey(enchantName: String, level: Int) =
-        "${enchantName.uppercase()}:$level"
-
-    /** Cached lowest BIN for an enchant book, or null if not yet fetched / no
-     *  active auctions / failed. Use [ensureEnchantBookPrice] to populate. */
-    fun getEnchantBookPrice(enchantName: String, level: Int): Double? =
-        bookLowestBin[bookKey(enchantName, level)]
-
-    /** Best-effort: ensure this enchant book's LBIN is fresh in cache.
-     *  Fire-and-forget; safe to call every frame from an overlay. */
-    fun ensureEnchantBookPrice(enchantName: String, level: Int) {
-        val key = bookKey(enchantName, level)
-        val age = bookFetchedAt[key] ?: 0L
-        if (System.currentTimeMillis() - age < LBIN_TTL_MS) return
-        if (!bookInFlight.add(key)) return
-        scope.launch(Dispatchers.IO) {
-            try {
-                fetchSkyCoflBookLowestBin(enchantName.uppercase(), level)?.let {
-                    bookLowestBin[key] = it
-                    bookFetchedAt[key] = System.currentTimeMillis()
-                }
-            } catch (t: Throwable) {
-                CopMod.logger.warn("[cop] SkyCofl book fetch failed for $key: ${t.message}")
-            } finally {
-                bookInFlight.remove(key)
-            }
+    /** Lowest bazaar instant-sell price for the enchant book matching the given
+     *  NBT enchant key (e.g. `sharpness`, `ultimate_combo`) at the given level,
+     *  or null if no such book is on bazaar.
+     *
+     *  Convenience: if the caller dropped the `ULTIMATE_` prefix (typing `combo`
+     *  for an ultimate enchant), we try the ultimate id as a fallback so
+     *  `getEnchantBookPrice("combo", 5)` still works. */
+    fun getEnchantBookPrice(enchantName: String, level: Int): Double? {
+        val name = enchantName.uppercase()
+        bazaarSell["ENCHANTMENT_${name}_$level"]?.let { return it }
+        if (!name.startsWith("ULTIMATE_")) {
+            bazaarSell["ENCHANTMENT_ULTIMATE_${name}_$level"]?.let { return it }
         }
-    }
-
-    /** Synchronous-ish per-book LBIN fetch with a callback. Used by /copdev pricetest. */
-    fun fetchEnchantBookPrice(enchantName: String, level: Int, force: Boolean = false, onDone: (Double?) -> Unit) {
-        val key = bookKey(enchantName, level)
-        val cached = bookLowestBin[key]
-        val age = bookFetchedAt[key] ?: 0L
-        if (!force && cached != null && System.currentTimeMillis() - age < LBIN_TTL_MS) {
-            onDone(cached); return
-        }
-        scope.launch(Dispatchers.IO) {
-            val price = try {
-                fetchSkyCoflBookLowestBin(enchantName.uppercase(), level)
-            } catch (t: Throwable) {
-                CopMod.logger.warn("[cop] SkyCofl book fetch failed for $key: ${t.message}")
-                null
-            }
-            if (price != null) {
-                bookLowestBin[key] = price
-                bookFetchedAt[key] = System.currentTimeMillis()
-            }
-            onDone(price ?: cached)
-        }
-    }
-
-    private fun fetchSkyCoflBookLowestBin(enchantName: String, level: Int): Double? {
-        val url = URL_SKYCOFL_BOOK_F.format(enchantName, level)
-        val conn = openJsonGet(url)
-        conn.inputStream.use { stream ->
-            val root = JsonParser.parseReader(InputStreamReader(stream))
-            if (!root.isJsonArray) return null
-            var minPerItem = Double.MAX_VALUE
-            for (el in root.asJsonArray) {
-                val obj = el.asJsonObject
-                val count = obj.get("count")?.asInt ?: 1
-                val bid = obj.get("startingBid")?.asDouble ?: continue
-                if (count <= 0 || bid <= 0) continue
-                val perItem = bid / count
-                if (perItem < minPerItem) minPerItem = perItem
-            }
-            return if (minPerItem != Double.MAX_VALUE) minPerItem else null
-        }
+        return null
     }
 
     /** Best-effort: ensure this item's LBIN is fresh in cache. Fire-and-forget;
