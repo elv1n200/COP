@@ -81,6 +81,10 @@ object CroesusParser {
      *  the reroll driver in Phase 4. */
     const val BUY_REROLL_SLOT: Int = 50
 
+    /** "Go Back" button in the run sub-screen — returns to the Croesus list.
+     *  4-row chest, slot 30. Verified via debug dump. */
+    const val RUN_BACK_SLOT: Int = 30
+
     // -- GUI detection ----------------------------------------------------------
 
     fun inCroesusMenu(screen: Screen?): Boolean =
