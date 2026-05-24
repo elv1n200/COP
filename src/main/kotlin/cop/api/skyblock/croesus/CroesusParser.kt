@@ -97,6 +97,28 @@ object CroesusParser {
         screen is AbstractContainerScreen<*> &&
             BUY_CONFIRM_TITLE_REGEX.matches(screen.title.string.trim())
 
+    /** Parse the chest currently displayed in the buy-confirm screen.
+     *
+     *  Slot 31 ("Open Reward Chest") has the same lore structure as a chest
+     *  tier icon on the run sub-screen — `Contents` / items / blank / `Cost` /
+     *  value — so we can reuse [parseChestLore]. The buy-confirm title is the
+     *  bare tier name ("Wood", "Gold", …, "Bedrock") which gives us the tier
+     *  colour for the chat output.
+     *
+     *  Returns null when [title] isn't a recognised tier; otherwise either a
+     *  Success or Failure ChestParseResult. The slot index in the returned
+     *  ChestInfo is [BUY_CONFIRM_SLOT] — callers needing the original run
+     *  sub-screen slot should remember it separately. */
+    fun parseBuyConfirmChest(menu: AbstractContainerMenu, title: String): ChestParseResult? {
+        val tierName = title.trim()
+        val colourCode = TIER_COLOUR_CODE[tierName] ?: return null
+        val lorePlain = lorePlain(menu, BUY_CONFIRM_SLOT)
+            ?: return ChestParseResult.Failure(tierName, "buy-confirm slot $BUY_CONFIRM_SLOT empty")
+        val loreFormatted = loreFormatted(menu, BUY_CONFIRM_SLOT)
+            ?: return ChestParseResult.Failure(tierName, "buy-confirm slot $BUY_CONFIRM_SLOT empty")
+        return parseChestLore(BUY_CONFIRM_SLOT, tierName, colourCode, lorePlain, loreFormatted)
+    }
+
     // -- Run-selection screen ---------------------------------------------------
 
     /** Slot indices on the top-level Croesus screen whose tooltip contains

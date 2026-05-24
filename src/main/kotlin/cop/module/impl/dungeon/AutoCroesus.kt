@@ -12,6 +12,7 @@ import cop.module.Module
 import cop.utils.ChatUtils.modMessage
 import cop.utils.EntityUtils
 import cop.utils.StringUtils.formattedString
+import cop.utils.skyblock.ItemUtils.skyblockId
 import cop.utils.skyblock.PriceClient
 import cop.utils.skyblock.player.ContainerUtils
 import cop.utils.skyblock.player.interact.AuraAction
@@ -23,7 +24,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.Entity
 
 /**
- * Auto Croesus — Phase 3c (multi-run auto-claim).
+ * Auto Croesus — Phase 4 (kismet rerolls layered on top of multi-run auto-claim).
  *
  *  - Highlights unclaimed runs on the top-level Croesus screen (Phase 2).
  *  - On a run sub-screen, draws an overlay listing each chest tier with cost,
@@ -36,10 +37,13 @@ import net.minecraft.world.entity.Entity
  *    every unclaimed run on the current page, claims the best chest in each,
  *    backs out, repeats. Pair with [chainClaim] for full hands-free claim of
  *    every chest above threshold across every run (key-using players).
+ *  - **Phase 4:** [useKismet] — when entering a buy-confirm whose profit is
+ *    below [rerollThreshold], consumes a Kismet Feather from inventory to
+ *    reroll once. After the reroll, buys if the new profit is at or above
+ *    [minProfit]; otherwise backs out (kismet is gone — that's the gamble).
  *
- * No NPC walking, no pagination, no kismet/reroll, no loot log — saved for
- * 3d / 4 / 5. Master kill switch [autoClaim] defaults OFF so the keybind is
- * inert until the user explicitly opts in.
+ * No pagination, no loot log — saved for 5+. Master kill switch [autoClaim]
+ * defaults OFF so the keybind is inert until the user explicitly opts in.
  */
 object AutoCroesus : Module(
     "Auto Croesus",
@@ -112,6 +116,22 @@ object AutoCroesus : Module(
             "to also claim multiple chests per run (requires Dungeon Chest Keys in inventory)."
     )
 
+    // -- Phase 4 (kismet rerolls) --------------------------------------------
+
+    private val useKismet by switch(
+        "Use kismet", false,
+        desc = "On a buy-confirm whose chest profit is below the Reroll threshold, consume a " +
+            "Kismet Feather from inventory to reroll the chest contents once. If the reroll " +
+            "leaves profit below Min profit, the driver backs out and continues the cycle " +
+            "(the kismet is gone — that's the gamble). One kismet max per chest per run."
+    )
+    private val rerollThreshold by slider(
+        "Reroll threshold", 500_000, 0, 5_000_000, 50_000,
+        desc = "Trigger a kismet reroll if the best chest's profit is below this. Should be " +
+            "higher than Min profit; otherwise rerolls never fire (the chest would never enter " +
+            "the buy-confirm in the first place). Set to 0 to disable the threshold gate."
+    )
+
     /** Cached parser output for the currently-open run sub-screen. */
     @Volatile private var lastChests: List<ChestParseResult> = emptyList()
     /** Sticky containerId snapshot — wipes cache when the user opens a different container. */
@@ -121,7 +141,9 @@ object AutoCroesus : Module(
     /** The claim driver's state machine.
      *   - IDLE                — nothing in flight; keybind is the only way in.
      *   - AWAIT_CONFIRM       — sent chest-tier click, waiting for Hypixel to open
-     *                           the buy-confirm screen so we can press "Open Reward Chest".
+     *                           the buy-confirm screen so we can decide buy vs. reroll.
+     *   - AWAIT_REROLL_RESULT — sent kismet reroll click on the buy-confirm; waiting
+     *                           for slot 31's lore to refresh with the new chest contents.
      *   - AWAIT_NEXT_PARSE    — Chain/multi-run. Sent the buy click; waiting for
      *                           the run sub-screen to repopulate so we can pick the
      *                           next-best chest. Also entered after AWAIT_RUN_SCREEN
@@ -136,6 +158,7 @@ object AutoCroesus : Module(
     private enum class ClaimState {
         IDLE,
         AWAIT_CONFIRM,
+        AWAIT_REROLL_RESULT,
         AWAIT_NEXT_PARSE,
         AWAIT_AFTER_BUY,
         AWAIT_RUN_SCREEN,
@@ -168,6 +191,16 @@ object AutoCroesus : Module(
     private var croesusReadyAtTick = 0L
     private val CROESUS_SYNC_DELAY_TICKS = 10L
 
+    /** True after we send a reroll click on the current buy-confirm — guards
+     *  against double-rerolling the same chest. Reset each time we start a
+     *  fresh claim cycle in [tryStartClaim]. */
+    private var hasRerolledThisChest = false
+    /** Earliest tick at which we'll re-parse the buy-confirm after a reroll
+     *  click. Same idea as croesusReadyAtTick — give Hypixel time to push the
+     *  refreshed slot lore before we re-evaluate. */
+    private var rerollReadyAtTick = 0L
+    private val REROLL_SYNC_DELAY_TICKS = 15L
+
     init {
         // Wipe parser cache whenever a GUI opens/closes — stale data from the
         // previous run would otherwise leak into the next overlay.
@@ -188,14 +221,16 @@ object AutoCroesus : Module(
             // Driver dispatch: each non-IDLE state has a specific expected
             // next screen. Anything else is an abort.
             when (claimState) {
-                ClaimState.AWAIT_CONFIRM       -> handleConfirmOpen(screen)
-                ClaimState.AWAIT_AFTER_BUY     -> handleAfterBuyOpen(screen)
-                ClaimState.AWAIT_RUN_SCREEN    -> handleRunScreenOpen(screen)
-                ClaimState.AWAIT_CROESUS_LIST  -> handleCroesusListOpen(screen)
+                ClaimState.AWAIT_CONFIRM        -> handleConfirmOpen(screen)
+                ClaimState.AWAIT_AFTER_BUY      -> handleAfterBuyOpen(screen)
+                ClaimState.AWAIT_RUN_SCREEN     -> handleRunScreenOpen(screen)
+                ClaimState.AWAIT_CROESUS_LIST   -> handleCroesusListOpen(screen)
                 ClaimState.AWAIT_NEXT_PARSE,
+                ClaimState.AWAIT_REROLL_RESULT,
                 ClaimState.IDLE -> {
-                    // AWAIT_NEXT_PARSE waits passively for the TickEvent parser
-                    // loop to pick up the next chest. IDLE has nothing to do.
+                    // AWAIT_NEXT_PARSE / AWAIT_REROLL_RESULT both wait passively
+                    // for the TickEvent poller to fire when their respective
+                    // data has settled. IDLE has nothing to do.
                 }
             }
         }
@@ -235,6 +270,16 @@ object AutoCroesus : Module(
             // opens Croesus this session, prices start streaming in. Subsequent
             // opens are instant (cached for 30 min).
             PriceClient.refreshIfStale()
+
+            // Kismet poller: after a reroll click, wait REROLL_SYNC_DELAY_TICKS
+            // for Hypixel to refresh slot 31's lore, then re-enter the decide
+            // flow. hasRerolledThisChest is true at this point so the reroll
+            // branch won't fire again — only buy or skip is reachable.
+            if (claimState == ClaimState.AWAIT_REROLL_RESULT &&
+                CroesusParser.inBuyConfirmMenu(screen) &&
+                monotonicTick >= rerollReadyAtTick) {
+                decideBuyOrReroll(screen)
+            }
 
             // Multi-run polling: in AWAIT_CROESUS_LIST, wait for the menu to
             // fully populate, then wait CROESUS_SYNC_DELAY_TICKS extra ticks
@@ -363,10 +408,9 @@ object AutoCroesus : Module(
 
     // -- GuiEvent.Open dispatch handlers ---------------------------------------
 
-    /** Step 2 of a claim cycle: the buy-confirm just opened. Click "Open
-     *  Reward Chest"; loot drops straight into inventory, screen closes
-     *  server-side. Then pick the next state based on which automation
-     *  modes the user has enabled. */
+    /** Step 2 of a claim cycle: the buy-confirm just opened. Hand off to the
+     *  shared [decideBuyOrReroll] flow, which is also invoked from the
+     *  TickEvent poller after a reroll click. */
     private fun handleConfirmOpen(screen: net.minecraft.client.gui.screens.Screen) {
         if (!CroesusParser.inBuyConfirmMenu(screen)) {
             val title = (screen as? AbstractContainerScreen<*>)?.title?.string ?: "?"
@@ -374,6 +418,70 @@ object AutoCroesus : Module(
             resetCycle()
             return
         }
+        decideBuyOrReroll(screen as AbstractContainerScreen<*>)
+    }
+
+    /** Single decision point for the buy-confirm screen.
+     *
+     *  Called twice in the kismet-reroll path: once from [handleConfirmOpen]
+     *  when the screen first opens (eligible for reroll), and once from the
+     *  TickEvent poller after the reroll lore has refreshed
+     *  ([hasRerolledThisChest] is then true, so only buy/skip are reachable). */
+    private fun decideBuyOrReroll(screen: AbstractContainerScreen<*>) {
+        val title = screen.title.string.trim()
+        val parsed = CroesusParser.parseBuyConfirmChest(screen.menu, title)
+        val chest = (parsed as? ChestParseResult.Success)?.chest
+
+        // First branch: try a reroll if the user has it armed and we haven't
+        // already burned a feather on this chest.
+        if (chest != null && useKismet && !hasRerolledThisChest &&
+            chest.profit < rerollThreshold && hasKismetFeather()) {
+            if (!ContainerUtils.click(CroesusParser.BUY_REROLL_SLOT)) {
+                modMessage("&cAutoCroesus: kismet click failed (no container id).")
+                resetCycle()
+                return
+            }
+            hasRerolledThisChest = true
+            modMessage(
+                "&d⟳ AutoCroesus: rerolling &r$pendingTier&d chest with kismet " +
+                    "&7(profit ${PriceClient.formatPrice(chest.profit)} < threshold " +
+                    "${PriceClient.formatPrice(rerollThreshold.toDouble())})."
+            )
+            claimState = ClaimState.AWAIT_REROLL_RESULT
+            rerollReadyAtTick = monotonicTick + REROLL_SYNC_DELAY_TICKS
+            claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
+            return
+        }
+
+        // Second branch: post-reroll profit dropped below Min profit — back out
+        // rather than buy a guaranteed loss. Skipped pre-reroll because the
+        // first-pass tryStartClaim already filtered above minProfit.
+        if (chest != null && hasRerolledThisChest && chest.profit < minProfit) {
+            if (!ContainerUtils.click(CroesusParser.BUY_BACK_SLOT)) {
+                modMessage("&cAutoCroesus: back-out click failed.")
+                resetCycle()
+                return
+            }
+            modMessage(
+                "&cAutoCroesus: skipping &r${chest.tierColourCode}${chest.tierName}&c — " +
+                    "post-reroll profit &f${PriceClient.formatPrice(chest.profit)}&c below " +
+                    "Min profit. Continuing cycle…"
+            )
+            // Back at run sub-screen: in any auto mode, fall through to
+            // AWAIT_NEXT_PARSE so the chain handler picks the next step
+            // (most likely: best chest is still the just-rerolled one, which
+            // is below threshold, so it'll click Go Back and continue).
+            claimState = when {
+                multiRun || chainClaim -> ClaimState.AWAIT_NEXT_PARSE
+                else -> ClaimState.IDLE
+            }
+            if (claimState != ClaimState.IDLE) {
+                claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
+            }
+            return
+        }
+
+        // Third branch: buy normally.
         if (!ContainerUtils.click(CroesusParser.BUY_CONFIRM_SLOT)) {
             modMessage("&cAutoCroesus: buy-confirm opened but click failed (no container id).")
             resetCycle()
@@ -398,6 +506,16 @@ object AutoCroesus : Module(
             // single chest-click roundtrip.
             claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
         }
+    }
+
+    /** Returns true if the player has at least one Kismet Feather in the
+     *  main 36-slot inventory (hotbar + main inv). */
+    private fun hasKismetFeather(): Boolean {
+        val player = mc.player ?: return false
+        for (i in 0 until 36) {
+            if (player.inventory.getItem(i).skyblockId == "KISMET_FEATHER") return true
+        }
+        return false
     }
 
     /** Multi-run, post-buy. The buy-confirm has closed; Hypixel may:
@@ -488,6 +606,8 @@ object AutoCroesus : Module(
         multiRunRunsThisCycle = 0
         noScreenSinceTick = 0L
         croesusReadyAtTick = 0L
+        hasRerolledThisChest = false
+        rerollReadyAtTick = 0L
     }
 
     /** Try to reopen the Croesus menu by interacting with the nearby NPC
@@ -643,6 +763,8 @@ object AutoCroesus : Module(
         // then-manual flows don't add up across unrelated sessions.
         if (!fromChain) chainClaimsThisCycle = 0
         claimState = ClaimState.AWAIT_CONFIRM
+        // Each new chest gets a fresh reroll opportunity.
+        hasRerolledThisChest = false
         claimDeadlineTick = monotonicTick + claimTimeoutTicks.toLong()
         pendingTier = "${best.tierColourCode}${best.tierName}"
         modMessage(
