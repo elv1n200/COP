@@ -201,6 +201,18 @@ object AutoCroesus : Module(
     private var rerollReadyAtTick = 0L
     private val REROLL_SYNC_DELAY_TICKS = 15L
 
+    /** Chest tier slot we sent the most recent click on (in the run sub-screen).
+     *  Captured at click time so the back-out branch in [decideBuyOrReroll]
+     *  can mark it [exhaustedSlotsThisRun] and stop tryStartClaim from re-
+     *  selecting the same slot on the next chain iteration. */
+    private var pendingChestSlot = -1
+    /** Run-sub-screen slots we've already tried to claim in this run — either
+     *  rerolled without recovering profit, or otherwise backed out of. Filters
+     *  out of tryStartClaim's best-chest selection so we don't loop on the
+     *  same chest. Cleared in [handleRunScreenOpen] (new run = clean slate)
+     *  and in [resetCycle]. */
+    private val exhaustedSlotsThisRun = mutableSetOf<Int>()
+
     init {
         // Wipe parser cache whenever a GUI opens/closes — stale data from the
         // previous run would otherwise leak into the next overlay.
@@ -453,24 +465,32 @@ object AutoCroesus : Module(
             return
         }
 
-        // Second branch: post-reroll profit dropped below Min profit — back out
-        // rather than buy a guaranteed loss. Skipped pre-reroll because the
-        // first-pass tryStartClaim already filtered above minProfit.
-        if (chest != null && hasRerolledThisChest && chest.profit < minProfit) {
+        // Second branch: back out if profit is below Min profit. Two ways to
+        // reach here:
+        //   (a) post-reroll: kismet was burned but the new contents are still
+        //       below Min profit — buying would be a guaranteed loss.
+        //   (b) speculative-enter without reroll: useKismet was on at click
+        //       time, but the feather vanished before the buy-confirm opened
+        //       (rare race), so we entered but can't actually upgrade.
+        // Either way, mark the slot exhausted so the next chain iteration
+        // doesn't re-pick it.
+        if (chest != null && chest.profit < minProfit) {
             if (!ContainerUtils.click(CroesusParser.BUY_BACK_SLOT)) {
                 modMessage("&cAutoCroesus: back-out click failed.")
                 resetCycle()
                 return
             }
+            if (pendingChestSlot >= 0) exhaustedSlotsThisRun.add(pendingChestSlot)
+            val reason = if (hasRerolledThisChest) "post-reroll profit" else "profit"
             modMessage(
                 "&cAutoCroesus: skipping &r${chest.tierColourCode}${chest.tierName}&c — " +
-                    "post-reroll profit &f${PriceClient.formatPrice(chest.profit)}&c below " +
+                    "$reason &f${PriceClient.formatPrice(chest.profit)}&c below " +
                     "Min profit. Continuing cycle…"
             )
             // Back at run sub-screen: in any auto mode, fall through to
-            // AWAIT_NEXT_PARSE so the chain handler picks the next step
-            // (most likely: best chest is still the just-rerolled one, which
-            // is below threshold, so it'll click Go Back and continue).
+            // AWAIT_NEXT_PARSE. tryStartClaim now filters exhausted slots,
+            // so the chain handler picks the next-best (or backs out of the
+            // run entirely in multi-run mode).
             claimState = when {
                 multiRun || chainClaim -> ClaimState.AWAIT_NEXT_PARSE
                 else -> ClaimState.IDLE
@@ -560,6 +580,8 @@ object AutoCroesus : Module(
      *  kicks off the first claim as soon as fresh data is available. */
     private fun handleRunScreenOpen(screen: net.minecraft.client.gui.screens.Screen) {
         if (CroesusParser.inRunMenu(screen)) {
+            // Fresh run = clean slate for exhausted slot tracking.
+            exhaustedSlotsThisRun.clear()
             claimState = ClaimState.AWAIT_NEXT_PARSE
             claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
         } else {
@@ -608,6 +630,8 @@ object AutoCroesus : Module(
         croesusReadyAtTick = 0L
         hasRerolledThisChest = false
         rerollReadyAtTick = 0L
+        pendingChestSlot = -1
+        exhaustedSlotsThisRun.clear()
     }
 
     /** Try to reopen the Croesus menu by interacting with the nearby NPC
@@ -706,7 +730,14 @@ object AutoCroesus : Module(
      *      effort, no user attention needed),
      *    - "no chest above threshold" either prints a chain-complete summary
      *      (single-run mode) or sends the "Go Back" click to advance the
-     *      multi-run cycle to the next unclaimed run. */
+     *      multi-run cycle to the next unclaimed run.
+     *
+     *  Kismet upgrade path: when [useKismet] is on AND a feather is in inv
+     *  AND best chest profit is below [rerollThreshold], we enter the buy-
+     *  confirm even if profit is also below [minProfit] — the reroll might
+     *  recover. [decideBuyOrReroll] backs out if the post-reroll profit is
+     *  still below [minProfit] and adds the slot to [exhaustedSlotsThisRun]
+     *  so we don't re-pick it on the next chain iteration. */
     private fun tryStartClaim(screen: AbstractContainerScreen<*>, fromChain: Boolean = false) {
         // The keybind handler already checked autoClaim / IDLE for the manual
         // path; chain calls have those preconditions checked by their callers.
@@ -719,15 +750,23 @@ object AutoCroesus : Module(
             if (!fromChain) modMessage("&cAutoCroesus: already claiming (state=$claimState) — wait or close GUI.")
             return
         }
+        // Filter out chests we've already attempted (failed reroll + skip)
+        // so chainClaim / multiRun don't pick the same slot forever.
         val best: ChestInfo? = lastChests
             .filterIsInstance<ChestParseResult.Success>()
+            .filter { it.chest.slot !in exhaustedSlotsThisRun }
             .maxByOrNull { it.chest.profit }
             ?.chest
         if (best == null) {
             if (!fromChain) modMessage("&cAutoCroesus: no chests parsed yet — wait a moment for the overlay.")
             return
         }
-        if (best.profit < minProfit) {
+        // Speculative-enter for kismet: if profit is below minProfit BUT we
+        // have a kismet armed and the chest is also below rerollThreshold,
+        // enter anyway to try the reroll.
+        val canKismetUpgrade = useKismet && hasKismetFeather() && best.profit < rerollThreshold
+        val canEnterBuyConfirm = best.profit >= minProfit || canKismetUpgrade
+        if (!canEnterBuyConfirm) {
             if (fromChain) {
                 if (multiRun) {
                     // Continue the multi-run cycle: leave this run, advance
@@ -765,12 +804,18 @@ object AutoCroesus : Module(
         claimState = ClaimState.AWAIT_CONFIRM
         // Each new chest gets a fresh reroll opportunity.
         hasRerolledThisChest = false
+        pendingChestSlot = best.slot
         claimDeadlineTick = monotonicTick + claimTimeoutTicks.toLong()
         pendingTier = "${best.tierColourCode}${best.tierName}"
-        modMessage(
+        val msg = if (best.profit < minProfit) {
+            // Entered speculatively for the kismet upgrade path.
+            "&dAutoCroesus: opening ★ &r$pendingTier&d chest to try a kismet upgrade " +
+                "&7(profit ${PriceClient.formatPrice(best.profit)})."
+        } else {
             "&aAutoCroesus: claiming ★ &r$pendingTier&a chest " +
                 "&7(profit ${PriceClient.formatPrice(best.profit)})."
-        )
+        }
+        modMessage(msg)
     }
 
     /** Logs the current GUI's title + every non-empty slot (chest area only,
