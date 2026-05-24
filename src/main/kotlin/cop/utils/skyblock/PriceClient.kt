@@ -48,6 +48,7 @@ object PriceClient {
     private const val LBIN_TTL_MS: Long = 10L * 60 * 1000
 
     private val bazaarSell = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-sell
+    private val bazaarBuy  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-buy (price sellers list at)
     private val lowestBin  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> LBIN (from any source)
     private val lowestBinFetchedAt = ConcurrentHashMap<String, Long>()  // per-id fetch time for TTL
     private val lbinInFlight = ConcurrentHashMap.newKeySet<String>()    // dedupe concurrent SkyCofl fetches
@@ -76,6 +77,11 @@ object PriceClient {
     }
 
     fun getBazaarSell(itemId: String): Double? = bazaarSell[itemId]
+    /** Bazaar **buy** price — what a sell-order is listed at, i.e. the price
+     *  someone has to pay to instant-buy. Useful as a fallback when [getBazaarSell]
+     *  is 0 (no active buy orders): the item still has a real market value, you
+     *  just have to be patient and post a sell order yourself near this number. */
+    fun getBazaarBuy(itemId: String): Double? = bazaarBuy[itemId]
     fun getLowestBin(itemId: String): Double? = lowestBin[itemId]
 
     /** "Hyperion" -> "HYPERION" (via the Hypixel items registry). Case- and
@@ -114,21 +120,30 @@ object PriceClient {
     // separate cache, separate fetch, or any AH path — the bulk bazaar refresh
     // already has all 762 of them populated as soon as it runs.
 
-    /** Lowest bazaar instant-sell price for the enchant book matching the given
-     *  NBT enchant key (e.g. `sharpness`, `ultimate_combo`) at the given level,
-     *  or null if no such book is on bazaar.
+    /** Best-available bazaar price for the enchant book matching the given NBT
+     *  enchant key (e.g. `sharpness`, `ultimate_combo`) at the given level, or
+     *  null if no such book is on bazaar.
+     *
+     *  Strategy: try sellPrice (instant-sell) first; if that's missing/0,
+     *  fall back to buyPrice (what sellers list at) — for thinly-traded books
+     *  like Bank I the sellPrice can sit at 0 with no buyers, but the item is
+     *  still worth ~buyPrice if you post a sell order.
      *
      *  Convenience: if the caller dropped the `ULTIMATE_` prefix (typing `combo`
      *  for an ultimate enchant), we try the ultimate id as a fallback so
      *  `getEnchantBookPrice("combo", 5)` still works. */
     fun getEnchantBookPrice(enchantName: String, level: Int): Double? {
         val name = enchantName.uppercase()
-        bazaarSell["ENCHANTMENT_${name}_$level"]?.let { return it }
+        bazaarPriceFor("ENCHANTMENT_${name}_$level")?.let { return it }
         if (!name.startsWith("ULTIMATE_")) {
-            bazaarSell["ENCHANTMENT_ULTIMATE_${name}_$level"]?.let { return it }
+            bazaarPriceFor("ENCHANTMENT_ULTIMATE_${name}_$level")?.let { return it }
         }
         return null
     }
+
+    /** Best bazaar price for an item — sellPrice if it exists, else buyPrice. */
+    private fun bazaarPriceFor(id: String): Double? =
+        bazaarSell[id] ?: bazaarBuy[id]
 
     /** Best-effort: ensure this item's LBIN is fresh in cache. Fire-and-forget;
      *  if data is older than [LBIN_TTL_MS] (or missing entirely), kicks off a
@@ -223,10 +238,13 @@ object PriceClient {
             check(root.get("success")?.asBoolean == true) { "success=false" }
             val products = root.getAsJsonObject("products") ?: return
             bazaarSell.clear()
+            bazaarBuy.clear()
             for ((id, json) in products.entrySet()) {
                 val qs = json.asJsonObject.getAsJsonObject("quick_status") ?: continue
-                val sell = qs.get("sellPrice")?.asDouble ?: continue
-                if (sell > 0) bazaarSell[id] = sell
+                // sellPrice = price you'd get instant-selling (highest active buy order).
+                // buyPrice  = price you'd pay instant-buying (lowest active sell order).
+                qs.get("sellPrice")?.asDouble?.takeIf { it > 0 }?.let { bazaarSell[id] = it }
+                qs.get("buyPrice")?.asDouble?.takeIf { it > 0 }?.let { bazaarBuy[id] = it }
             }
         }
     }

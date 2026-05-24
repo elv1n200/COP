@@ -44,7 +44,11 @@ object AutoCroesus : Module(
     )
     private val highlightBest by switch(
         "Highlight best chest", true,
-        desc = "Prepend a ★ marker to the highest-profit chest in the overlay."
+        desc = "Prepend a ★ in the overlay and draw an outline around the highest-profit chest icon in the GUI."
+    )
+    private val bestColour by colourPicker(
+        "Best-chest highlight", Colour.RGB(255, 215, 0, 0.85f), allowAlpha = true,
+        desc = "Outline colour drawn around the best-profit chest icon."
     )
     private val refreshTicks by slider(
         "Refresh rate", 5, 1, 40, 1,
@@ -101,14 +105,27 @@ object AutoCroesus : Module(
 
         on<GuiEvent.Slot.Draw> {
             val screen = mc.screen as? AbstractContainerScreen<*> ?: return@on
-            if (!CroesusParser.inCroesusMenu(screen)) return@on
-            val stack = slot.item.takeUnless { it.isEmpty } ?: return@on
-            val lore = stack.get(DataComponents.LORE) ?: return@on
-            // Plain-text contains — works regardless of which colour codes
-            // Hypixel wraps the line in (see CroesusParser.LORE_UNCLAIMED_MARKER).
-            val hasMarker = lore.lines.any { CroesusParser.LORE_UNCLAIMED_MARKER in it.string }
-            if (!hasMarker) return@on
-            drawSlotOutline(ctx, slot.x, slot.y, unclaimedColour.rgb, borderWidth)
+            when {
+                // Top-level Croesus screen: outline every unopened run.
+                CroesusParser.inCroesusMenu(screen) -> {
+                    val stack = slot.item.takeUnless { it.isEmpty } ?: return@on
+                    val lore = stack.get(DataComponents.LORE) ?: return@on
+                    // Plain-text contains — works regardless of which colour codes
+                    // Hypixel wraps the line in (see CroesusParser.LORE_UNCLAIMED_MARKER).
+                    val hasMarker = lore.lines.any { CroesusParser.LORE_UNCLAIMED_MARKER in it.string }
+                    if (hasMarker) drawSlotOutline(ctx, slot.x, slot.y, unclaimedColour.rgb, borderWidth)
+                }
+                // Run sub-screen: outline the best-profit chest icon.
+                highlightBest && CroesusParser.inRunMenu(screen) -> {
+                    val bestSlot = lastChests
+                        .filterIsInstance<ChestParseResult.Success>()
+                        .maxByOrNull { it.chest.profit }
+                        ?.chest?.slot ?: return@on
+                    if (slot.index == bestSlot) {
+                        drawSlotOutline(ctx, slot.x, slot.y, bestColour.rgb, borderWidth)
+                    }
+                }
+            }
         }
 
         on<GuiEvent.Draw.Post> {
