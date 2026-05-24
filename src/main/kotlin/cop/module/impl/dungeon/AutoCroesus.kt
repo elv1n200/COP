@@ -529,11 +529,18 @@ object AutoCroesus : Module(
     }
 
     /** Returns true if the player has at least one Kismet Feather in the
-     *  main 36-slot inventory (hotbar + main inv). */
+     *  main 36-slot inventory (hotbar + main inv). Checks both the skyblock
+     *  id (preferred — exact match) and the display name (fallback — survives
+     *  the id changing if Hypixel ever renames it). */
     private fun hasKismetFeather(): Boolean {
         val player = mc.player ?: return false
         for (i in 0 until 36) {
-            if (player.inventory.getItem(i).skyblockId == "KISMET_FEATHER") return true
+            val stack = player.inventory.getItem(i)
+            if (stack.isEmpty) continue
+            if (stack.skyblockId == "KISMET_FEATHER") return true
+            // Fallback: display-name contains. hoverName.string is plain text
+            // (formatting stripped), so this catches "§dKismet Feather" too.
+            if (stack.hoverName.string.contains("Kismet Feather", ignoreCase = true)) return true
         }
         return false
     }
@@ -820,8 +827,10 @@ object AutoCroesus : Module(
 
     /** Logs the current GUI's title + every non-empty slot (chest area only,
      *  player inv excluded) with name + lore so the parser can be debugged
-     *  against real Hypixel data. Output goes to the game log because chat
-     *  isn't usable inside container screens. */
+     *  against real Hypixel data. Also dumps the player's main 36-slot
+     *  inventory with skyblock IDs — needed to debug Phase 4 kismet detection.
+     *  Output goes to the game log because chat isn't usable inside container
+     *  screens. */
     private fun dumpScreen(screen: AbstractContainerScreen<*>) {
         val title = screen.title.string
         val menu = screen.menu
@@ -837,8 +846,21 @@ object AutoCroesus : Module(
             log.info("[cop]   slot=$i name=\"$name\"")
             for ((j, line) in lore.withIndex()) log.info("[cop]     lore[$j]=\"$line\"")
         }
+        // Player inventory (hotbar 0..8, main 9..35) with skyblock IDs —
+        // used to diagnose Phase 4 kismet detection ("why didn't reroll fire").
+        val player = mc.player
+        if (player != null) {
+            log.info("[cop] CroesusDump — player inventory (36 slots, hotbar + main):")
+            for (i in 0 until 36) {
+                val stack = player.inventory.getItem(i)
+                if (stack.isEmpty) continue
+                val name = stack.hoverName.string
+                val id = stack.skyblockId ?: "(no skyblock id)"
+                log.info("[cop]   inv[$i] name=\"$name\" id=\"$id\"")
+            }
+        }
         // Confirmation message — visible once the player closes the GUI.
-        modMessage("&aDumped \"$title\" to latest.log ($end chest-area slots scanned).")
+        modMessage("&aDumped \"$title\" to latest.log ($end chest slots + 36 inv slots scanned).")
     }
 
     private fun reset() {
