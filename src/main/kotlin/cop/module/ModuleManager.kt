@@ -52,6 +52,7 @@ object ModuleManager {
             SimonSays,
             ArrowAlign,
             SecretRoutes,
+            AutoCroesus,
             BonzoStaffHelper,
             TerminalWaypoints,
 
