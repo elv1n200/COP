@@ -1,11 +1,14 @@
 package cop.module.impl.dungeon
 
+import cop.CopMod
 import cop.api.colour.Colour
 import cop.api.events.GuiEvent
 import cop.api.events.TickEvent
+import cop.api.input.CatKeys
 import cop.api.skyblock.croesus.ChestParseResult
 import cop.api.skyblock.croesus.CroesusParser
 import cop.module.Module
+import cop.utils.ChatUtils.modMessage
 import cop.utils.StringUtils.formattedString
 import cop.utils.skyblock.PriceClient
 import net.minecraft.client.gui.GuiGraphics
@@ -42,6 +45,11 @@ object AutoCroesus : Module(
     private val refreshTicks by slider(
         "Refresh rate", 5, 1, 40, 1,
         desc = "Re-parse the open chest GUI every N ticks (lower = snappier, higher = cheaper).", unit = "t"
+    )
+    private val debugDumpKey by keybind(
+        "Debug dump key",
+        desc = "While in the Croesus / run GUI: dump title + every chest icon's name + lore to latest.log " +
+            "(for diagnosing parser failures — chat isn't available in container screens, so this lives here)."
     )
 
     /** Cached parser output for the currently-open run sub-screen. */
@@ -97,6 +105,35 @@ object AutoCroesus : Module(
             if (lastChests.isEmpty()) return@on
             renderProfitOverlay(ctx)
         }
+
+        on<GuiEvent.Key.Press> {
+            if (key == CatKeys.KEY_NONE || key != debugDumpKey.key) return@on
+            val screen = mc.screen as? AbstractContainerScreen<*> ?: return@on
+            if (!CroesusParser.inCroesusMenu(screen) && !CroesusParser.inRunMenu(screen)) return@on
+            dumpScreen(screen)
+            cancel()
+        }
+    }
+
+    /** Logs the current GUI's title + every top-section slot's name + lore so
+     *  the parser can be debugged against real Hypixel data. Output goes to
+     *  the game log because chat isn't usable inside container screens. */
+    private fun dumpScreen(screen: AbstractContainerScreen<*>) {
+        val title = screen.title.string
+        val menu = screen.menu
+        val end = (menu.slots.size - 36).coerceAtMost(27)
+        val log = CopMod.logger
+        log.info("[cop] CroesusDump — title=\"$title\", slots=${menu.slots.size}")
+        for (i in 0 until end) {
+            val stack = menu.slots.getOrNull(i)?.item ?: continue
+            if (stack.isEmpty) continue
+            val name = stack.hoverName.string
+            val lore = stack.get(DataComponents.LORE)?.lines?.map { it.string } ?: emptyList()
+            log.info("[cop]   slot=$i name=\"$name\"")
+            for ((j, line) in lore.withIndex()) log.info("[cop]     lore[$j]=\"$line\"")
+        }
+        // Confirmation message — visible once the player closes the GUI.
+        modMessage("&aDumped \"$title\" to latest.log (${end} top slots scanned).")
     }
 
     private fun reset() {
