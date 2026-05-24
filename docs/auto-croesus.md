@@ -49,6 +49,7 @@ Rerolls und Loot-Log.
 | Setting | Standard | Effekt |
 |---|---|---|
 | **Multi-run claim** | aus | Vom Croesus-Listing aus: Run öffnen → besten Chest claimen → zurück zur Liste → nächster Run → wiederholen. Nutzt **NPC-Re-Interact** nach jedem Buy (Menü schließt sich Server-seitig komplett). |
+| **Multi-run pacing** | 6 t | Padding zwischen Server-Aktionen: post-Buy → NPC-Reopen, und Menü-Open → Klick. Runter (3-4) auf schneller Connection, hoch (10-15) wenn `expected run sub-screen, got Croesus` Fehler auftauchen. |
 
 ### Kismet Rerolls
 
@@ -158,9 +159,9 @@ IDLE
 ```
 
 Wichtige Timing-Hacks:
-- **10 t Sync-Delay** auf Croesus-Liste — Hypixel rejected sonst Klicks weil `lastStateId` noch nicht synct ist.
+- **`multiRunPacing` (default 6 t)** auf Croesus-Liste — Hypixel rejected sonst Klicks weil `lastStateId` noch nicht synct ist. Gleicher Wert auch als "kein Screen für N Ticks = Menü zu" Detector im post-Buy-Pfad.
 - **15 t Sync-Delay** nach Reroll-Klick — sonst parsen wir die alten Slot-31 Lore-Daten.
-- **10 t no-screen detector** auf AWAIT_AFTER_BUY — Hypixel schließt das Menü komplett nach Buy, kein Replacement-Screen → wir clicken den NPC neu.
+- **10 t Sync-Delay** auf buy-confirm in der Kismet-Path — wartet auf Slot-31 Lore vor parse.
 
 Loot-Persistence: `CroesusLootLog.append()` schreibt eine Zeile pro Chest
 als JSON in `config/cop/croesus-loot.jsonl`. Reads sind line-by-line,
