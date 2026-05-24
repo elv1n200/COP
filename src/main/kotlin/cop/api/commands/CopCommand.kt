@@ -70,19 +70,18 @@ object CopCommand {
                     modMessage("&cUsage: /copdev pricetest <ITEM_ID or display name>")
                     return@invoke
                 }
-                modMessage("&7Fetching prices (cache age=${cop.utils.skyblock.PriceClient.ageMs / 1000}s)...")
-                cop.utils.skyblock.PriceClient.refreshIfStale {
+                val pc = cop.utils.skyblock.PriceClient
+                val ageLabel = if (pc.isLoaded) "${pc.ageMs / 1000}s" else "never"
+                modMessage("&7Fetching prices (cache age=$ageLabel)...")
+                pc.refreshIfStale {
                     mc.execute {
-                        val pc = cop.utils.skyblock.PriceClient
                         val id = pc.resolveItemId(raw) ?: raw.uppercase().replace(' ', '_')
                         val bz = pc.getBazaarSell(id)
                         val lb = pc.getLowestBin(id)
                         val best = pc.getPrice(id)
-                        val err = pc.lastError
-                        if (err != null) {
-                            modMessage("&cPrice fetch error: &f$err")
-                            return@execute
-                        }
+                        // Partial successes still populate the cache; surface
+                        // any per-source failure but don't suppress the result.
+                        pc.lastError?.let { modMessage("&eFetch issues: &f$it") }
                         modMessage(
                             "&bPrice for &f$id&7:" +
                                 "\n  &7bazaar sell: " + (bz?.let { "&a$it" } ?: "&8n/a") +
