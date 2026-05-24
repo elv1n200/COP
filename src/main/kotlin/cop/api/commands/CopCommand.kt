@@ -73,21 +73,23 @@ object CopCommand {
                 val pc = cop.utils.skyblock.PriceClient
                 val ageLabel = if (pc.isLoaded) "${pc.ageMs / 1000}s" else "never"
                 modMessage("&7Fetching prices (cache age=$ageLabel)...")
+                // First the bulk refresh (bazaar + items registry + Moulberry
+                // bulk LBIN as best-effort), then a guaranteed per-item SkyCofl
+                // LBIN lookup so the result is accurate even when Moulberry is dead.
                 pc.refreshIfStale {
-                    mc.execute {
-                        val id = pc.resolveItemId(raw) ?: raw.uppercase().replace(' ', '_')
-                        val bz = pc.getBazaarSell(id)
-                        val lb = pc.getLowestBin(id)
-                        val best = pc.getPrice(id)
-                        // Partial successes still populate the cache; surface
-                        // any per-source failure but don't suppress the result.
-                        pc.lastError?.let { modMessage("&eFetch issues: &f$it") }
-                        modMessage(
-                            "&bPrice for &f$id&7:" +
-                                "\n  &7bazaar sell: " + (bz?.let { "&a$it" } ?: "&8n/a") +
-                                "\n  &7lowest BIN:  " + (lb?.let { "&a$it" } ?: "&8n/a") +
-                                "\n  &7best:        " + (best?.let { "&e$it" } ?: "&cunknown")
-                        )
+                    val id = pc.resolveItemId(raw) ?: raw.uppercase().replace(' ', '_')
+                    pc.fetchLowestBin(id) { lb ->
+                        mc.execute {
+                            val bz = pc.getBazaarSell(id)
+                            val best = pc.getPrice(id)
+                            pc.lastError?.let { modMessage("&eBulk fetch issues: &f$it") }
+                            modMessage(
+                                "&bPrice for &f$id&7:" +
+                                    "\n  &7bazaar sell: " + (bz?.let { "&a$it" } ?: "&8n/a") +
+                                    "\n  &7lowest BIN:  " + (lb?.let { "&a$it" } ?: "&8n/a") +
+                                    "\n  &7best:        " + (best?.let { "&e$it" } ?: "&cunknown")
+                            )
+                        }
                     }
                 }
             }

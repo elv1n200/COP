@@ -28,17 +28,26 @@ import java.util.concurrent.ConcurrentHashMap
  * via [CopMod.scope] — call sites get an async callback when the data is ready.
  */
 object PriceClient {
-    private const val URL_BAZAAR    = "https://api.hypixel.net/skyblock/bazaar"
-    private const val URL_LOWESTBIN = "https://moulberry.codes/lowestbin.json"
-    private const val URL_ITEMS     = "https://api.hypixel.net/v2/resources/skyblock/items"
+    private const val URL_BAZAAR        = "https://api.hypixel.net/skyblock/bazaar"
+    private const val URL_LOWESTBIN     = "https://moulberry.codes/lowestbin.json"
+    private const val URL_ITEMS         = "https://api.hypixel.net/v2/resources/skyblock/items"
+    /** Per-item SkyCofl BIN endpoint — used as the primary LBIN source because
+     *  Moulberry's bulk endpoint is intermittently dead. Returns a JSON array of
+     *  all active BIN auctions for the given tag; lowest BIN = min(startingBid/count). */
+    private const val URL_SKYCOFL_BIN_F = "https://sky.coflnet.com/api/auctions/tag/%s/active/bin"
 
-    /** Default cache lifetime — matches what AutoCroesus (the CT module we're
-     *  porting) uses. Long enough that we don't hammer Hypixel; short enough
-     *  that prices stay roughly current across a play session. */
+    /** Default cache lifetime for the bulk sources (Bazaar + items registry +
+     *  Moulberry's bulk LBIN). Auctions move faster than that — per-item LBIN
+     *  uses its own shorter TTL below. */
     const val DEFAULT_REFRESH_MS: Long = 30L * 60 * 1000
+    /** Per-item LBIN TTL — auctions can change in minutes, so we don't trust
+     *  a cached value much longer than this. */
+    private const val LBIN_TTL_MS: Long = 10L * 60 * 1000
 
     private val bazaarSell = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-sell
-    private val lowestBin  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> LBIN
+    private val lowestBin  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> LBIN (from any source)
+    private val lowestBinFetchedAt = ConcurrentHashMap<String, Long>()  // per-id fetch time for TTL
+    private val lbinInFlight = ConcurrentHashMap.newKeySet<String>()    // dedupe concurrent SkyCofl fetches
     private val nameToId   = ConcurrentHashMap<String, String>()  // lowercased display name -> ITEM_ID
 
     @Volatile private var lastRefreshedAt = 0L
@@ -70,6 +79,53 @@ object PriceClient {
      *  whitespace-insensitive. Returns null if no exact match. */
     fun resolveItemId(displayName: String): String? =
         nameToId[displayName.trim().lowercase()]
+
+    /** Best-effort: ensure this item's LBIN is fresh in cache. Fire-and-forget;
+     *  if data is older than [LBIN_TTL_MS] (or missing entirely), kicks off a
+     *  SkyCofl fetch on a background coroutine. Designed to be called every
+     *  frame by the overlay — cheap when cached, deduped when in flight. */
+    fun ensureLowestBin(itemId: String) {
+        if (itemId.isBlank()) return
+        val age = lowestBinFetchedAt[itemId] ?: 0L
+        if (System.currentTimeMillis() - age < LBIN_TTL_MS) return
+        if (!lbinInFlight.add(itemId)) return  // a fetch is already in flight
+        scope.launch(Dispatchers.IO) {
+            try {
+                fetchSkyCoflLowestBin(itemId)?.let {
+                    lowestBin[itemId] = it
+                    lowestBinFetchedAt[itemId] = System.currentTimeMillis()
+                }
+            } catch (t: Throwable) {
+                CopMod.logger.warn("[cop] SkyCofl LBIN fetch failed for $itemId: ${t.message}")
+            } finally {
+                lbinInFlight.remove(itemId)
+            }
+        }
+    }
+
+    /** Synchronous-ish per-item LBIN fetch with a callback. Honours the TTL —
+     *  if the cached value is still fresh, [onDone] fires immediately with it.
+     *  Used by /copdev pricetest. */
+    fun fetchLowestBin(itemId: String, force: Boolean = false, onDone: (Double?) -> Unit) {
+        val cached = lowestBin[itemId]
+        val age = lowestBinFetchedAt[itemId] ?: 0L
+        if (!force && cached != null && System.currentTimeMillis() - age < LBIN_TTL_MS) {
+            onDone(cached); return
+        }
+        scope.launch(Dispatchers.IO) {
+            val price = try {
+                fetchSkyCoflLowestBin(itemId)
+            } catch (t: Throwable) {
+                CopMod.logger.warn("[cop] SkyCofl LBIN fetch failed for $itemId: ${t.message}")
+                null
+            }
+            if (price != null) {
+                lowestBin[itemId] = price
+                lowestBinFetchedAt[itemId] = System.currentTimeMillis()
+            }
+            onDone(price ?: cached)
+        }
+    }
 
     /** Kick off an async refresh if the cache is older than [maxAgeMs] (set 0 to
      *  force). [onDone] fires after the refresh finishes (or immediately if the
@@ -125,15 +181,47 @@ object PriceClient {
         }
     }
 
+    /** Moulberry's bulk lowestbin.json. Often dead (HTTP 522) — we treat it as
+     *  best-effort: a successful fetch warms the LBIN cache for thousands of
+     *  items at once, but per-item SkyCofl fetches are the primary source so
+     *  Moulberry's flakiness can't block Auto Croesus.
+     *
+     *  Critically, this does NOT clear the cache up-front — Moulberry's bulk
+     *  data merges with whatever per-item SkyCofl fetches have already loaded,
+     *  and a failure leaves the existing per-item entries intact. */
     private fun fetchLowestBin() {
         val conn = openJsonGet(URL_LOWESTBIN)
         conn.inputStream.use { stream ->
             val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
-            lowestBin.clear()
+            val now = System.currentTimeMillis()
             for ((id, json) in root.entrySet()) {
                 val price = json.asDouble
-                if (price > 0) lowestBin[id] = price
+                if (price > 0) {
+                    lowestBin[id] = price
+                    lowestBinFetchedAt[id] = now
+                }
             }
+        }
+    }
+
+    /** Per-item SkyCofl BIN lookup. Returns the lowest BIN per unit, or null
+     *  if the item has no active BIN auctions (or the request failed). */
+    private fun fetchSkyCoflLowestBin(itemId: String): Double? {
+        val url = URL_SKYCOFL_BIN_F.format(itemId)
+        val conn = openJsonGet(url)
+        conn.inputStream.use { stream ->
+            val root = JsonParser.parseReader(InputStreamReader(stream))
+            if (!root.isJsonArray) return null
+            var minPerItem = Double.MAX_VALUE
+            for (el in root.asJsonArray) {
+                val obj = el.asJsonObject
+                val count = obj.get("count")?.asInt ?: 1
+                val bid = obj.get("startingBid")?.asDouble ?: continue
+                if (count <= 0 || bid <= 0) continue
+                val perItem = bid / count
+                if (perItem < minPerItem) minPerItem = perItem
+            }
+            return if (minPerItem != Double.MAX_VALUE) minPerItem else null
         }
     }
 
