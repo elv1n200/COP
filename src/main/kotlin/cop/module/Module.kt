@@ -45,6 +45,14 @@ abstract class Module(
     @Transient
     val category: Category = getCategory(this::class.java) ?: Category.RENDER
 
+    /** Optional sub-grouping inside [category], derived from the package
+     *  segment immediately after the category name. e.g. a module at
+     *  `cop.module.impl.dungeon.cheats.AutoRCM` gets `subCategory = "cheats"`.
+     *  Flat modules (no extra sub-package) get null. Used by the ClickGUI
+     *  to render collapsible sub-headers under crowded categories. */
+    @Transient
+    val subCategory: String? = getSubCategory(this::class.java, category)
+
     val keybinding: Keybinding = this@Module.key.let { Keybinding(it).apply { onPress = ::onKeybind } }  // todo on press/release/hold
 
     var enabled: Boolean = toggled
@@ -156,5 +164,16 @@ abstract class Module(
     private companion object {
         private fun getCategory(clazz: Class<out Module>): Category? =
             Category.entries.find { clazz.`package`.name.contains(it.name, true) }
+
+        /** Extract the package segment immediately after the category name as
+         *  the sub-category label. Returns null if the module sits directly in
+         *  the category package (no sub-grouping). Lowercased so the rendered
+         *  header can capitalise consistently. */
+        private fun getSubCategory(clazz: Class<out Module>, category: Category): String? {
+            val parts = clazz.`package`.name.split('.')
+            val idx = parts.indexOfFirst { it.equals(category.name, true) }
+            if (idx < 0 || idx + 1 >= parts.size) return null
+            return parts[idx + 1].lowercase()
+        }
     }
 }

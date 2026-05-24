@@ -205,9 +205,20 @@ object ClickGui : Module(
                             copies(),
                             colour = colour { theme.surface.withAlpha(0.7f).rgb }
                         )
-                        for (module in modulesFor(category)) {
+                        // Group modules by sub-category. The flat group (subCategory == null)
+                        // renders directly. Other groups get a collapsible sub-header.
+                        val grouped = modulesFor(category).groupBy { it.subCategory }
+                        // Render flat (un-grouped) modules first if any exist.
+                        grouped[null]?.forEach { module ->
                             moduleScopes.add(module to module(module))
                         }
+                        // Then each sub-group with its header.
+                        grouped.entries
+                            .filter { it.key != null }
+                            .sortedBy { it.value.firstOrNull()?.let { m -> modulesFor(category).indexOf(m) } ?: 0 }
+                            .forEach { (sub, mods) ->
+                                subCategorySection(category, sub!!, mods, moduleScopes, data)
+                            }
                     }
                 }
 
@@ -280,6 +291,47 @@ object ClickGui : Module(
                 }
             }
         }.element.moveToBottom()
+    }
+
+    /** Render a collapsible sub-section inside a category column. Mirrors the
+     *  main category header pattern (Animatable height + click to toggle) but
+     *  smaller and a touch more muted. Per-sub-category collapse state is
+     *  persisted in [CategoryData.subExtended]. */
+    private fun ElementScope<*>.subCategorySection(
+        category: Category,
+        sub: String,
+        mods: List<Module>,
+        moduleScopes: MutableList<Pair<Module, ElementScope<*>>>,
+        data: CategoryData,
+    ) {
+        val expanded = data.subExtended[sub] ?: true
+        val height = Animatable(from = Bounding, to = 0.px, swapIf = !expanded)
+
+        block(
+            size(Copying, 20.px),
+            colour = colour { theme.surface.withAlpha(0.55f).rgb },
+        ) {
+            text(
+                string = sub.replaceFirstChar { it.uppercase() },
+                size = 12.px,
+                colour = theme.onSurfaceVariant,
+            )
+            // Click anywhere on the sub-header to toggle. We use left-click
+            // (button = 0) since right-click on the parent column is reserved
+            // for category drag/collapse.
+            onClick {
+                height.animate(0.2.seconds, style = Animation.Style.EaseInOutQuint)
+                redraw()
+                data.subExtended[sub] = !(data.subExtended[sub] ?: true)
+                true
+            }
+        }
+
+        column(size(Copying, height)) {
+            for (module in mods) {
+                moduleScopes.add(module to module(module))
+            }
+        }
     }
 
     private fun ElementScope<*>.module(module: Module) = column(size(Copying)) {
@@ -419,7 +471,15 @@ object ClickGui : Module(
         open(clickGui)
     }
 
-    data class CategoryData(var x: Float, var y: Float, var extended: Boolean) {
+    data class CategoryData(
+        var x: Float,
+        var y: Float,
+        var extended: Boolean,
+        /** Per-sub-category collapse state. Key is the lowercased package
+         *  segment used as the sub-category id (e.g. "cheats", "huds"); value
+         *  is true when the sub-section is expanded. Missing key = expanded. */
+        var subExtended: MutableMap<String, Boolean> = mutableMapOf(),
+    ) {
         val defaultX = x
         val defaultY = y
     }

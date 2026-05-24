@@ -39,8 +39,8 @@ import cop.api.skyblock.dungeon.Dungeon.floor
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonDoor
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomType
-import cop.module.impl.dungeon.AutoClear
-import cop.module.impl.dungeon.DungeonMap
+import cop.module.impl.dungeon.cheats.AutoClear
+import cop.module.impl.dungeon.worldrender.DungeonMap
 import cop.utils.StringUtils.width
 import cop.utils.Vec2i
 import cop.utils.equalsOneOf

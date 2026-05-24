@@ -11,7 +11,7 @@ import cop.api.colour.Colour
 import cop.api.colour.mix
 import cop.api.colour.multiply
 import cop.api.skyblock.dungeon.odonscanning.ScanUtils
-import cop.module.impl.dungeon.DungeonMap
+import cop.module.impl.dungeon.worldrender.DungeonMap
 import cop.utils.Vec2i
 import cop.utils.equalsOneOf
 import cop.utils.rotateAroundNorth

@@ -1,6 +1,6 @@
 package cop.mixins;
 
-import cop.module.impl.dungeon.CancelInteract;
+import cop.module.impl.dungeon.qol.CancelInteract;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.client.player.LocalPlayer;

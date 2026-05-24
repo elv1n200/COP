@@ -9,8 +9,8 @@ import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
 import cop.api.events.core.EventBus.on
 import cop.api.skyblock.dungeon.Dungeon.getMageCooldownMultiplier
-import cop.module.impl.dungeon.InvincibilityTimer.cataLevel
-import cop.module.impl.dungeon.InvincibilityTimer.mageReduction
+import cop.module.impl.dungeon.huds.InvincibilityTimer.cataLevel
+import cop.module.impl.dungeon.huds.InvincibilityTimer.mageReduction
 import cop.module.impl.render.ClickGui.currentPet
 import cop.module.impl.render.ClickGui.updateCurrentPet
 import cop.utils.Scheduler.scheduleLoop

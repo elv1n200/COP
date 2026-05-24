@@ -2,7 +2,7 @@ package cop.api.skyblock.dungeon.odonscanning.tiles
 
 import cop.api.colour.Colour
 import cop.api.colour.multiply
-import cop.module.impl.dungeon.DungeonMap
+import cop.module.impl.dungeon.worldrender.DungeonMap
 import cop.utils.Vec2i
 import cop.utils.equalsOneOf
 

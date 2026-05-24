@@ -5,8 +5,11 @@ import cop.api.events.KeyEvent
 import cop.api.events.MouseEvent
 import cop.api.events.core.EventBus
 import cop.api.input.CatKeys
-import cop.module.impl.dungeon.*
-import cop.module.impl.dungeon.puzzlesolvers.PuzzleSolvers
+import cop.module.impl.dungeon.cheats.*
+import cop.module.impl.dungeon.huds.*
+import cop.module.impl.dungeon.qol.*
+import cop.module.impl.dungeon.solvers.*
+import cop.module.impl.dungeon.worldrender.*
 import cop.module.impl.mining.*
 import cop.module.impl.misc.*
 import cop.module.impl.misc.riftsolvers.MirrorverseSolvers

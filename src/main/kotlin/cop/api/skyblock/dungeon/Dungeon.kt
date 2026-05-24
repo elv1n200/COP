@@ -25,7 +25,7 @@ import cop.api.skyblock.Island
 import cop.api.skyblock.Location
 import cop.api.skyblock.dungeon.odonscanning.ScanUtils
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
-import cop.module.impl.dungeon.LeapMenu
+import cop.module.impl.dungeon.qol.LeapMenu
 import cop.module.impl.render.ClickGui
 import cop.utils.ChatUtils.modMessage
 import cop.utils.StringUtils.noControlCodes
