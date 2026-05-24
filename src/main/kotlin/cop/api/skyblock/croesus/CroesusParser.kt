@@ -65,6 +65,26 @@ object CroesusParser {
     /** Run-sub-menu titles. Hypixel formats both regular and master mode this way. */
     private val RUN_TITLE_REGEX = Regex("^(?:Master )?Catacombs - .+$")
 
+    /** Buy-confirm screen — opened by clicking a chest tier in the run sub-screen.
+     *  Title is just the tier name (`Wood`, `Gold`, …, `Bedrock`). 6-row chest;
+     *  the buy button sits at [BUY_CONFIRM_SLOT], go-back at [BUY_BACK_SLOT],
+     *  kismet/reroll at [BUY_REROLL_SLOT]. Slot layout verified via debug dump. */
+    private val BUY_CONFIRM_TITLE_REGEX =
+        Regex("^(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)$")
+
+    /** "Open Reward Chest" — clicking this deducts the cost and drops the
+     *  loot straight into the player's inventory (no separate reward GUI). */
+    const val BUY_CONFIRM_SLOT: Int = 31
+    /** "Go Back" button — returns to the run sub-screen. */
+    const val BUY_BACK_SLOT: Int = 49
+    /** "Reroll Chest" (kismet feather). Not used by Phase 3a; reserved for
+     *  the reroll driver in Phase 4. */
+    const val BUY_REROLL_SLOT: Int = 50
+
+    /** "Go Back" button in the run sub-screen — returns to the Croesus list.
+     *  4-row chest, slot 30. Verified via debug dump. */
+    const val RUN_BACK_SLOT: Int = 30
+
     // -- GUI detection ----------------------------------------------------------
 
     fun inCroesusMenu(screen: Screen?): Boolean =
@@ -72,6 +92,32 @@ object CroesusParser {
 
     fun inRunMenu(screen: Screen?): Boolean =
         screen is AbstractContainerScreen<*> && RUN_TITLE_REGEX.matches(screen.title.string.trim())
+
+    fun inBuyConfirmMenu(screen: Screen?): Boolean =
+        screen is AbstractContainerScreen<*> &&
+            BUY_CONFIRM_TITLE_REGEX.matches(screen.title.string.trim())
+
+    /** Parse the chest currently displayed in the buy-confirm screen.
+     *
+     *  Slot 31 ("Open Reward Chest") has the same lore structure as a chest
+     *  tier icon on the run sub-screen — `Contents` / items / blank / `Cost` /
+     *  value — so we can reuse [parseChestLore]. The buy-confirm title is the
+     *  bare tier name ("Wood", "Gold", …, "Bedrock") which gives us the tier
+     *  colour for the chat output.
+     *
+     *  Returns null when [title] isn't a recognised tier; otherwise either a
+     *  Success or Failure ChestParseResult. The slot index in the returned
+     *  ChestInfo is [BUY_CONFIRM_SLOT] — callers needing the original run
+     *  sub-screen slot should remember it separately. */
+    fun parseBuyConfirmChest(menu: AbstractContainerMenu, title: String): ChestParseResult? {
+        val tierName = title.trim()
+        val colourCode = TIER_COLOUR_CODE[tierName] ?: return null
+        val lorePlain = lorePlain(menu, BUY_CONFIRM_SLOT)
+            ?: return ChestParseResult.Failure(tierName, "buy-confirm slot $BUY_CONFIRM_SLOT empty")
+        val loreFormatted = loreFormatted(menu, BUY_CONFIRM_SLOT)
+            ?: return ChestParseResult.Failure(tierName, "buy-confirm slot $BUY_CONFIRM_SLOT empty")
+        return parseChestLore(BUY_CONFIRM_SLOT, tierName, colourCode, lorePlain, loreFormatted)
+    }
 
     // -- Run-selection screen ---------------------------------------------------
 
@@ -189,8 +235,14 @@ object CroesusParser {
     /** Single source of truth for converting an item id to its sell value.
      *  Enchant books use [PriceClient.getEnchantBookPrice] so the smart
      *  ULTIMATE_ fallback kicks in for cases like "Bank" / "Wisdom" where the
-     *  plain-text lore doesn't mark them as ultimate but the bazaar id does. */
+     *  plain-text lore doesn't mark them as ultimate but the bazaar id does.
+     *
+     *  Phase 6 hook: items the user flagged worthless via [CroesusLists] are
+     *  treated as zero — the bazaar / AH still has a price but the player
+     *  isn't going to bother selling it, so it shouldn't inflate chest
+     *  profit calculations. */
     private fun priceFor(id: String): Double {
+        if (CroesusLists.isWorthless(id)) return 0.0
         if (id.startsWith("ENCHANTMENT_")) {
             // Split "ENCHANTMENT_<NAME>_<LEVEL>" to feed into getEnchantBookPrice's
             // smart lookup — that handles both ENCHANTMENT_BANK_1 -> tries

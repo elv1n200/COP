@@ -264,6 +264,84 @@ object CopCommand {
             }.suggests { ModuleManager.modules.map { it.name } }.description("Toggles specified module.")
 
             "hud" { open(HudManager.editor()) }.description("Opens Hud editor.")
+
+            // Phase 5: Auto Croesus loot summary. Reads the JSONL log written
+            // by the buy driver and prints aggregates per tier + top items.
+            // Window arg: today (default) | week | all | reset.
+            "loot" { windowArg: String? ->
+                val arg = (windowArg ?: "today").lowercase()
+                if (arg == "reset") {
+                    cop.api.skyblock.croesus.CroesusLootLog.clear()
+                    modMessage("&aCroesus loot log cleared.")
+                    return@invoke
+                }
+                val window = when (arg) {
+                    "today" -> cop.api.skyblock.croesus.CroesusLootLog.Window.TODAY
+                    "week"  -> cop.api.skyblock.croesus.CroesusLootLog.Window.WEEK
+                    "all"   -> cop.api.skyblock.croesus.CroesusLootLog.Window.ALL
+                    else -> {
+                        modMessage("&cUsage: /cop loot [today|week|all|reset]")
+                        return@invoke
+                    }
+                }
+                val s = cop.api.skyblock.croesus.CroesusLootLog.summarize(window)
+                if (s.chestCount == 0) {
+                    modMessage("&7No Croesus claims logged ${window.label}.")
+                    return@invoke
+                }
+                val pc = cop.utils.skyblock.PriceClient
+                val tierColour = mapOf(
+                    "Wood" to "&7", "Gold" to "&6", "Diamond" to "&b",
+                    "Emerald" to "&a", "Obsidian" to "&5", "Bedrock" to "&c",
+                )
+                val profitSign = if (s.totalProfit >= 0) "&a+" else "&c"
+                val lines = buildList {
+                    add("&6&lAuto Croesus loot &7(${window.label} • " +
+                        "&f${s.chestCount}&7 chest" + (if (s.chestCount == 1) "" else "s") +
+                        " across &f${s.runCount}&7 run" + (if (s.runCount == 1) "" else "s") + ")")
+                    add("&7  Spent: &c${pc.formatPrice(s.totalCost)}" +
+                        "  &7Earned: &a${pc.formatPrice(s.totalValue)}" +
+                        "  &7Profit: $profitSign${pc.formatPrice(s.totalProfit)}" +
+                        "  &7Kismets: &d${s.kismetsUsed}")
+                    if (s.byTier.isNotEmpty()) {
+                        add("&6By tier:")
+                        for (t in s.byTier) {
+                            val tc = tierColour[t.tier] ?: "&7"
+                            val tp = if (t.totalProfit >= 0) "&a+" else "&c"
+                            add("  ${tc}${t.tier}&7 x&f${t.count}&7  profit $tp${pc.formatPrice(t.totalProfit)}")
+                        }
+                    }
+                    if (s.topItems.isNotEmpty()) {
+                        add("&6Top items:")
+                        // Lore-formatted names sometimes already include " xN"
+                        // (essences, stacked books) — strip so we don't print
+                        // "Wither Essence x28 x28".
+                        val trailingQty = Regex("\\s+x\\d+\$")
+                        for (it in s.topItems) {
+                            val baseName = it.name.replace(trailingQty, "")
+                            val qtyLabel = if (it.totalQty > 1) " &7x&f${it.totalQty}" else ""
+                            add("  &f$baseName$qtyLabel  &a${pc.formatPrice(it.totalValue)}")
+                        }
+                    }
+                }
+                modMessage(lines.joinToString("\n"))
+            }.suggests("windowArg", "today", "week", "all", "reset")
+                .description("Auto Croesus loot summary. Window: today (default), week, all, reset.")
+
+            // Phase 6: persisted skyblock-id lists that shape the auto-claim
+            // driver's decisions. Same command shape for both lists; just
+            // differs in which MutableList<String> we mutate.
+            "alwaysbuy" { actionArg: String?, idArg: GreedyString? ->
+                lootListCommand("alwaysbuy", cop.api.skyblock.croesus.CroesusLists.alwaysBuy, actionArg, idArg)
+            }.suggests("actionArg", "list", "add", "remove", "clear")
+                .description("Skyblock IDs the driver claims regardless of profit threshold. " +
+                    "Subcommands: list (default), add <ID>, remove <ID>, clear.")
+
+            "worthless" { actionArg: String?, idArg: GreedyString? ->
+                lootListCommand("worthless", cop.api.skyblock.croesus.CroesusLists.worthless, actionArg, idArg)
+            }.suggests("actionArg", "list", "add", "remove", "clear")
+                .description("Skyblock IDs the price model values at 0 when computing chest profit. " +
+                    "Subcommands: list (default), add <ID>, remove <ID>, clear.")
         }
 
         command.sub("findlobby") { area: String, criteria: String, value: String ->
@@ -323,6 +401,52 @@ object CopCommand {
                 if (ticker.tick()) ticker = antiAfkTicker(delay)
             }
         }.description("Prevents afk kick.").suggests("delay", "40")
+    }
+
+    /** Shared dispatch for the Phase 6 always-buy / worthless list commands.
+     *  Both lists have identical shape: list (default), add <ID>, remove <ID>,
+     *  clear. IDs are stored uppercase + trimmed for case-insensitive match. */
+    private fun lootListCommand(
+        label: String,
+        list: MutableList<String>,
+        actionArg: String?,
+        idArg: GreedyString?,
+    ) {
+        val action = (actionArg ?: "list").lowercase()
+        when (action) {
+            "list" -> {
+                if (list.isEmpty()) {
+                    modMessage("&7Croesus $label list is empty.")
+                } else {
+                    modMessage("&6Croesus $label list &7(${list.size}):&r\n  &7" +
+                        list.joinToString("\n  &7"))
+                }
+            }
+            "add" -> {
+                val id = idArg?.string?.trim()?.uppercase()?.replace(' ', '_')
+                if (id.isNullOrEmpty()) {
+                    modMessage("&cUsage: /cop $label add <SKYBLOCK_ID>")
+                    return
+                }
+                if (id in list) modMessage("&7$id is already in the $label list.")
+                else { list.add(id); modMessage("&aAdded &f$id&a to the $label list (${list.size} total).") }
+            }
+            "remove", "rm", "delete" -> {
+                val id = idArg?.string?.trim()?.uppercase()?.replace(' ', '_')
+                if (id.isNullOrEmpty()) {
+                    modMessage("&cUsage: /cop $label remove <SKYBLOCK_ID>")
+                    return
+                }
+                if (list.remove(id)) modMessage("&aRemoved &f$id&a from the $label list.")
+                else modMessage("&7$id wasn't in the $label list.")
+            }
+            "clear" -> {
+                val n = list.size
+                list.clear()
+                modMessage("&aCleared &f$n&a entries from the $label list.")
+            }
+            else -> modMessage("&cUnknown action '$action'. Use list / add <ID> / remove <ID> / clear.")
+        }
     }
 
     fun init() {

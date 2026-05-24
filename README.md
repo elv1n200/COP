@@ -7,7 +7,7 @@ Hypixel Skyblock Endgame-Mod für Minecraft 26.1.2 (Fabric).
 
 ## Features
 
-**Dungeons** — Map, ESP, Puzzle Solver (Blaze / Boulder / Beams / Ice Fill / Ice Path / Quiz / TicTacToe / Water / Weirdos / Maze), Terminal Aura, Secret Aura / Trigger Bot, Auto Leap / Mask / CloseChest, Leap Menu, Splits, Tick Timer, Invincibility Timer, Cooldown Display, M3 Fire-Freeze (Display + Auto), F7 Boss Titles, M7 Relics, Maxor Crystals, Door Keys, Shadow Assassin Alert, Hidden Mobs, Persistent Secret Heads, Secret Routes (~150 vorgefertigte Routen), Necron Platform Highlight, Auto Blood Rush, Auto Clear, Auto RCM / LCM, Auto Superboom, Bonzo Staff Helper, Ragnarock, Dungeon Breaker, Fuck Diorite.
+**Dungeons** — Map, ESP, Puzzle Solver (Blaze / Boulder / Beams / Ice Fill / Ice Path / Quiz / TicTacToe / Water / Weirdos / Maze), Terminal Aura, Secret Aura / Trigger Bot, Auto Leap / Mask / CloseChest, Leap Menu, Splits, Tick Timer, Invincibility Timer, Cooldown Display, M3 Fire-Freeze (Display + Auto), F7 Boss Titles, M7 Relics, Maxor Crystals, Door Keys, Shadow Assassin Alert, Hidden Mobs, Persistent Secret Heads, Secret Routes (~150 vorgefertigte Routen), Necron Platform Highlight, Auto Blood Rush, Auto Clear, Auto RCM / LCM, Auto Superboom, Bonzo Staff Helper, Ragnarock, Dungeon Breaker, Fuck Diorite, **Auto Croesus** (Full-Auto Claim-Driver inkl. Kismet Rerolls und Loot-Log — [Doku](docs/auto-croesus.md)).
 
 **Mining** — Crystal Hollows Map, Crystal Hollows Scanner, Griefer Tracker.
 
@@ -40,7 +40,13 @@ Für einen Dev-Run mit DevAuth:
 ## Commands
 
 - `/cop` — öffnet die ClickGui
-- `/copdev` — Dev-Befehle (copy, simulate, currentroom, area, featurelist, centre, rotate)
+- `/cop toggle <module>` — Modul an/aus
+- `/cop hud` — HUD-Editor
+- `/cop loot [today|week|all|reset]` — Auto-Croesus Loot-Summary ([Details](docs/auto-croesus.md))
+- `/cop alwaysbuy [list|add|remove|clear] [ID]` — Auto-Croesus Always-Buy IDs
+- `/cop worthless [list|add|remove|clear] [ID]` — Auto-Croesus Worthless IDs
+- `/cop findlobby` / `/cop antiafk` — Lobby-Helpers
+- `/copdev` — Dev-Befehle (copy, simulate, currentroom, area, featurelist, centre, rotate, pricetest, croesusdump)
 - `/clearchat` — Chat leeren
 - `/f0` … `/m7` — joint die jeweilige Catacombs-Instanz
 
