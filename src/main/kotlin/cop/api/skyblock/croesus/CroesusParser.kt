@@ -203,11 +203,13 @@ object CroesusParser {
                 PriceClient.getEnchantBookPrice(name, lvl)?.let { return it }
             }
         }
+        // Bazaar sellPrice = what you'd actually get if you converted this item
+        // to coins right now. If it's 0 the item is genuinely worthless for
+        // instant-sale (no buyers) — we do NOT fall back to buyPrice because
+        // that's the *seller* side and listing your own sell order at that
+        // price is aspirational (could take days, price can move).
         PriceClient.getBazaarSell(id)?.let { return it }
-        // Thinly-traded items often have sellPrice=0; fall back to buyPrice
-        // so they're not reported as worthless. See the AutoCroesus screenshot
-        // where Bank I had sellPrice=0 / buyPrice=5.9.
-        PriceClient.getBazaarBuy(id)?.let { return it }
+        // Item isn't on bazaar at all — try AH lowest BIN instead.
         PriceClient.getLowestBin(id)?.let { return it }
         // Warm the per-item LBIN cache so subsequent overlay frames get a real
         // number — first call returns 0, the fetch finishes within ~200ms.
