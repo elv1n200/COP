@@ -48,6 +48,12 @@ object CroesusLootLog {
         /** True if a Kismet Feather was consumed to roll this chest. */
         val kismet: Boolean,
         val items: List<LootItem>,
+        /** Unique id for the run this chest came from — bumped each time the
+         *  player enters a new run sub-screen. Lets [summarize] count actual
+         *  runs even when multiple are claimed back-to-back on the same floor
+         *  within the same minute. Nullable for backwards compatibility with
+         *  entries written before this field existed. */
+        val runId: Long? = null,
     )
 
     /** One reward item within a [LootEntry]. [unitValue] is the per-unit price
@@ -142,11 +148,15 @@ object CroesusLootLog {
         val totalProfit = scoped.sumOf { it.profit }
         val kismetsUsed = scoped.count { it.kismet }
 
-        // "Run count" = unique (floor + timestamp-bucketed-to-the-second) sessions.
-        // We don't know an authoritative run id, so floor + minute is a decent proxy
-        // (one player can't realistically claim two separate runs of the same floor
-        // within a minute given the menu-transition timings).
-        val runCount = scoped.map { "${it.floor}@${it.timestamp / 60_000}" }.toSet().size
+        // "Run count" — prefers the explicit runId stamped by the driver each
+        // time the player enters a new run sub-screen. Falls back to a
+        // (floor, minute) bucket for entries written before runId existed.
+        // The fallback under-counts when multiple runs of the same floor are
+        // claimed within one minute (multi-run mode), but only old data is
+        // affected — new entries get accurate counts.
+        val runCount = scoped.map { e ->
+            e.runId?.toString() ?: "${e.floor}@${e.timestamp / 60_000}"
+        }.toSet().size
 
         val byTier = scoped.groupBy { it.tier }.map { (tier, list) ->
             TierStats(tier, list.size, list.sumOf { it.profit }, list.sumOf { it.totalValue })

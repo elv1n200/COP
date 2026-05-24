@@ -183,6 +183,11 @@ object AutoCroesus : Module(
      *  the slot-population packet (chest == null in decideBuyOrReroll's buy
      *  branch on the fast path). Reset on each new claim cycle. */
     private var pendingChestInfo: ChestInfo? = null
+    /** Synthetic id for the current run, bumped (= System.currentTimeMillis())
+     *  every time the parser detects a new run-sub-screen container. Stamped
+     *  into each LootEntry so summarise() can count actual runs even when
+     *  several are claimed back-to-back on the same floor. 0 = none active. */
+    private var currentRunId = 0L
     /** Counter for the per-cycle chat summary at the end of a chain. */
     private var chainClaimsThisCycle = 0
     /** Total chests bought during the current multi-run cycle (across all runs). */
@@ -362,6 +367,10 @@ object AutoCroesus : Module(
                 if (cid != cachedContainerId) {
                     lastChests = emptyList()
                     cachedContainerId = cid
+                    // New run-sub-screen container = new run for accounting
+                    // purposes. currentTimeMillis is unique enough (we never
+                    // need to collide-check) and survives across sessions.
+                    currentRunId = System.currentTimeMillis()
                     // Mark for immediate parse on the next tick. Use refreshTicks
                     // (not Int.MAX_VALUE — the ++ below would overflow to MIN_VALUE
                     // and the threshold check would then never fire).
@@ -586,6 +595,7 @@ object AutoCroesus : Module(
                         unitValue = item.unitValue,
                     )
                 },
+                runId = currentRunId.takeIf { it != 0L },
             ))
         }
         modMessage("&a✓ AutoCroesus: bought &r$pendingTier&a chest.")
