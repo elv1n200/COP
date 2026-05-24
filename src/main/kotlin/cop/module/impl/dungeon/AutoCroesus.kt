@@ -7,6 +7,7 @@ import cop.api.events.TickEvent
 import cop.api.input.CatKeys
 import cop.api.skyblock.croesus.ChestInfo
 import cop.api.skyblock.croesus.ChestParseResult
+import cop.api.skyblock.croesus.CroesusLootLog
 import cop.api.skyblock.croesus.CroesusParser
 import cop.module.Module
 import cop.utils.ChatUtils.modMessage
@@ -24,7 +25,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.Entity
 
 /**
- * Auto Croesus — Phase 4 (kismet rerolls layered on top of multi-run auto-claim).
+ * Auto Croesus — Phase 5 (loot log layered on the full auto-claim driver).
  *
  *  - Highlights unclaimed runs on the top-level Croesus screen (Phase 2).
  *  - On a run sub-screen, draws an overlay listing each chest tier with cost,
@@ -41,9 +42,13 @@ import net.minecraft.world.entity.Entity
  *    below [rerollThreshold], consumes a Kismet Feather from inventory to
  *    reroll once. After the reroll, buys if the new profit is at or above
  *    [minProfit]; otherwise backs out (kismet is gone — that's the gamble).
+ *  - **Phase 5:** Every successful buy persists a [CroesusLootLog.LootEntry]
+ *    to `config/cop/croesus-loot.jsonl`. Summarised by the `/cop loot`
+ *    command (today / week / all) with per-tier breakdown and top items.
  *
- * No pagination, no loot log — saved for 5+. Master kill switch [autoClaim]
- * defaults OFF so the keybind is inert until the user explicitly opts in.
+ * No pagination, no always-buy / worthless lists yet — saved for 3d / 6.
+ * Master kill switch [autoClaim] defaults OFF so the keybind is inert until
+ * the user explicitly opts in.
  */
 object AutoCroesus : Module(
     "Auto Croesus",
@@ -170,6 +175,9 @@ object AutoCroesus : Module(
     private var claimDeadlineTick = 0L
     /** Tier display label captured at click time, used in the success chat line. */
     private var pendingTier = ""
+    /** Run sub-screen title captured at click time, e.g. "Master Catacombs - Floor V".
+     *  Stored in the loot log so summaries can break down by floor / mode. */
+    private var pendingFloor = ""
     /** Counter for the per-cycle chat summary at the end of a chain. */
     private var chainClaimsThisCycle = 0
     /** Total chests bought during the current multi-run cycle (across all runs). */
@@ -547,6 +555,30 @@ object AutoCroesus : Module(
         }
         chainClaimsThisCycle++
         multiRunChestsThisCycle++
+        // Persist the loot. Only write if we have a parsed chest — if the
+        // parse failed (chest == null) we still buy (lossless fallback) but
+        // don't have item data to log.
+        if (chest != null) {
+            CroesusLootLog.append(CroesusLootLog.LootEntry(
+                timestamp = System.currentTimeMillis(),
+                floor = pendingFloor,
+                tier = chest.tierName,
+                cost = chest.cost,
+                totalValue = chest.totalValue,
+                profit = chest.profit,
+                kismet = hasRerolledThisChest,
+                items = chest.items.map { item ->
+                    CroesusLootLog.LootItem(
+                        // Strip the legacy "§5§o" italic prefix Hypixel
+                        // attaches to every lore line — looks bad in summaries.
+                        name = item.displayName.removePrefix("§5§o"),
+                        id = item.skyblockId,
+                        qty = item.qty,
+                        unitValue = item.unitValue,
+                    )
+                },
+            ))
+        }
         modMessage("&a✓ AutoCroesus: bought &r$pendingTier&a chest.")
         // Pick the next state. Order matters: multi-run is the broadest mode
         // and prefers to land in AWAIT_AFTER_BUY so the next-screen handler
@@ -853,6 +885,7 @@ object AutoCroesus : Module(
         pendingChestSlot = best.slot
         claimDeadlineTick = monotonicTick + claimTimeoutTicks.toLong()
         pendingTier = "${best.tierColourCode}${best.tierName}"
+        pendingFloor = screen.title.string.trim()
         val msg = if (best.profit < minProfit) {
             // Entered speculatively for the kismet upgrade path.
             "&dAutoCroesus: opening ★ &r$pendingTier&d chest to try a kismet upgrade " +
