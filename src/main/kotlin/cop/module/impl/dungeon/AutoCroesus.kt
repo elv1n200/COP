@@ -178,6 +178,11 @@ object AutoCroesus : Module(
     /** Run sub-screen title captured at click time, e.g. "Master Catacombs - Floor V".
      *  Stored in the loot log so summaries can break down by floor / mode. */
     private var pendingFloor = ""
+    /** Full [ChestInfo] captured from the run-sub-screen parse at click time.
+     *  Used as a fallback for the loot log when the buy-confirm parse races
+     *  the slot-population packet (chest == null in decideBuyOrReroll's buy
+     *  branch on the fast path). Reset on each new claim cycle. */
+    private var pendingChestInfo: ChestInfo? = null
     /** Counter for the per-cycle chat summary at the end of a chain. */
     private var chainClaimsThisCycle = 0
     /** Total chests bought during the current multi-run cycle (across all runs). */
@@ -555,19 +560,23 @@ object AutoCroesus : Module(
         }
         chainClaimsThisCycle++
         multiRunChestsThisCycle++
-        // Persist the loot. Only write if we have a parsed chest — if the
-        // parse failed (chest == null) we still buy (lossless fallback) but
-        // don't have item data to log.
-        if (chest != null) {
+        // Persist the loot. Prefer the freshly-parsed chest (kismet path,
+        // post-reroll: this is the only source of the new contents) and
+        // fall back to the run-sub-screen snapshot captured at click time
+        // (fast path: slot 31 hasn't populated yet, but the snapshot is
+        // equivalent because the chest's contents are determined server-side
+        // before either screen renders).
+        val chestForLog = chest ?: pendingChestInfo
+        if (chestForLog != null) {
             CroesusLootLog.append(CroesusLootLog.LootEntry(
                 timestamp = System.currentTimeMillis(),
                 floor = pendingFloor,
-                tier = chest.tierName,
-                cost = chest.cost,
-                totalValue = chest.totalValue,
-                profit = chest.profit,
+                tier = chestForLog.tierName,
+                cost = chestForLog.cost,
+                totalValue = chestForLog.totalValue,
+                profit = chestForLog.profit,
                 kismet = hasRerolledThisChest,
-                items = chest.items.map { item ->
+                items = chestForLog.items.map { item ->
                     CroesusLootLog.LootItem(
                         // Strip the legacy "§5§o" italic prefix Hypixel
                         // attaches to every lore line — looks bad in summaries.
@@ -709,6 +718,7 @@ object AutoCroesus : Module(
         rerollReadyAtTick = 0L
         confirmReadyAtTick = 0L
         pendingChestSlot = -1
+        pendingChestInfo = null
         exhaustedSlotsThisRun.clear()
     }
 
@@ -886,6 +896,12 @@ object AutoCroesus : Module(
         claimDeadlineTick = monotonicTick + claimTimeoutTicks.toLong()
         pendingTier = "${best.tierColourCode}${best.tierName}"
         pendingFloor = screen.title.string.trim()
+        // Snapshot for the loot log — the buy branch in decideBuyOrReroll
+        // may fire before slot 31's lore has populated (non-kismet fast
+        // path), in which case the buy-confirm parse returns null. The
+        // run-sub-screen data we just used to pick this chest is the same
+        // data the buy-confirm would parse, so it's a safe fallback.
+        pendingChestInfo = best
         val msg = if (best.profit < minProfit) {
             // Entered speculatively for the kismet upgrade path.
             "&dAutoCroesus: opening ★ &r$pendingTier&d chest to try a kismet upgrade " +
