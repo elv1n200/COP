@@ -201,6 +201,15 @@ object AutoCroesus : Module(
     private var rerollReadyAtTick = 0L
     private val REROLL_SYNC_DELAY_TICKS = 15L
 
+    /** Earliest tick at which we'll evaluate the buy-confirm in the kismet
+     *  path. handleConfirmOpen fires on GuiEvent.Open but slot 31's lore
+     *  (Contents / Cost / items — what decideBuyOrReroll parses) isn't pushed
+     *  until a few ticks later. Without this delay the parse fails, chest=null,
+     *  the reroll branch's `chest != null` guard skips, and we fall through to
+     *  buy without rerolling — even with a kismet sitting in inv. */
+    private var confirmReadyAtTick = 0L
+    private val CONFIRM_SYNC_DELAY_TICKS = 10L
+
     /** Chest tier slot we sent the most recent click on (in the run sub-screen).
      *  Captured at click time so the back-out branch in [decideBuyOrReroll]
      *  can mark it [exhaustedSlotsThisRun] and stop tryStartClaim from re-
@@ -283,10 +292,25 @@ object AutoCroesus : Module(
             // opens are instant (cached for 30 min).
             PriceClient.refreshIfStale()
 
-            // Kismet poller: after a reroll click, wait REROLL_SYNC_DELAY_TICKS
-            // for Hypixel to refresh slot 31's lore, then re-enter the decide
-            // flow. hasRerolledThisChest is true at this point so the reroll
-            // branch won't fire again — only buy or skip is reachable.
+            // Kismet poller (first-pass): handleConfirmOpen deferred the
+            // decision because slot 31's lore isn't populated yet when the
+            // Open event fires. Wait CONFIRM_SYNC_DELAY_TICKS AND require
+            // the lore to contain "Cost" (= Hypixel finished pushing) before
+            // running decideBuyOrReroll.
+            if (claimState == ClaimState.AWAIT_CONFIRM && useKismet &&
+                CroesusParser.inBuyConfirmMenu(screen) &&
+                monotonicTick >= confirmReadyAtTick) {
+                val lore = CroesusParser.lorePlain(screen.menu, CroesusParser.BUY_CONFIRM_SLOT)
+                val ready = lore?.any { it.trim() == "Cost" } == true
+                if (ready) decideBuyOrReroll(screen)
+                // Else keep polling — claimDeadlineTick catches stuck states.
+            }
+
+            // Kismet poller (post-reroll): after a reroll click, wait
+            // REROLL_SYNC_DELAY_TICKS for Hypixel to refresh slot 31's lore,
+            // then re-enter the decide flow. hasRerolledThisChest is true at
+            // this point so the reroll branch won't fire again — only buy or
+            // skip is reachable.
             if (claimState == ClaimState.AWAIT_REROLL_RESULT &&
                 CroesusParser.inBuyConfirmMenu(screen) &&
                 monotonicTick >= rerollReadyAtTick) {
@@ -420,9 +444,16 @@ object AutoCroesus : Module(
 
     // -- GuiEvent.Open dispatch handlers ---------------------------------------
 
-    /** Step 2 of a claim cycle: the buy-confirm just opened. Hand off to the
-     *  shared [decideBuyOrReroll] flow, which is also invoked from the
-     *  TickEvent poller after a reroll click. */
+    /** Step 2 of a claim cycle: the buy-confirm just opened.
+     *
+     *  Fast path (useKismet off): no decision to make — slot 31's lore isn't
+     *  needed, we just want to click slot 31 by index. Handing straight to
+     *  decideBuyOrReroll skips the reroll branch and clicks buy.
+     *
+     *  Kismet path: defer until the TickEvent poller sees slot 31 populated.
+     *  Hypixel pushes slot data asynchronously after the open packet, so
+     *  parsing here would read empty lore, fail, and silently fall through
+     *  to buy (bug observed on real data — the kismet was never used). */
     private fun handleConfirmOpen(screen: net.minecraft.client.gui.screens.Screen) {
         if (!CroesusParser.inBuyConfirmMenu(screen)) {
             val title = (screen as? AbstractContainerScreen<*>)?.title?.string ?: "?"
@@ -430,7 +461,14 @@ object AutoCroesus : Module(
             resetCycle()
             return
         }
-        decideBuyOrReroll(screen as AbstractContainerScreen<*>)
+        if (!useKismet) {
+            decideBuyOrReroll(screen as AbstractContainerScreen<*>)
+            return
+        }
+        // Kismet armed: TickEvent will fire decideBuyOrReroll once the
+        // CONFIRM_SYNC_DELAY_TICKS deadline has passed AND slot 31's lore
+        // contains a "Cost" line (i.e. Hypixel finished pushing it).
+        confirmReadyAtTick = monotonicTick + CONFIRM_SYNC_DELAY_TICKS
     }
 
     /** Single decision point for the buy-confirm screen.
@@ -637,6 +675,7 @@ object AutoCroesus : Module(
         croesusReadyAtTick = 0L
         hasRerolledThisChest = false
         rerollReadyAtTick = 0L
+        confirmReadyAtTick = 0L
         pendingChestSlot = -1
         exhaustedSlotsThisRun.clear()
     }
