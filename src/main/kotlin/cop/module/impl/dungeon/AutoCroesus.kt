@@ -57,6 +57,9 @@ object AutoCroesus : Module(
     /** Sticky containerId snapshot — wipes cache when the user opens a different container. */
     private var cachedContainerId: Int = -1
     private var ticksSinceParse = 0
+    // One-shot diag flags so we don't spam the log every tick / every frame.
+    @Volatile private var loggedParse = false
+    @Volatile private var loggedDraw = false
 
     init {
         // Wipe caches whenever a GUI opens/closes so we never show stale data
@@ -80,9 +83,20 @@ object AutoCroesus : Module(
                 if (ticksSinceParse >= refreshTicks) {
                     lastChests = CroesusParser.parseChests(screen.menu)
                     ticksSinceParse = 0
+                    if (!loggedParse) {
+                        loggedParse = true
+                        val ok = lastChests.count { it is ChestParseResult.Success }
+                        val fail = lastChests.count { it is ChestParseResult.Failure }
+                        CopMod.logger.info("[cop][croesus] parsed '${screen.title.string}' -> $ok success, $fail failure (total ${lastChests.size})")
+                        for (r in lastChests) when (r) {
+                            is ChestParseResult.Failure -> CopMod.logger.info("[cop][croesus]   FAIL ${r.tierName}: ${r.reason}")
+                            is ChestParseResult.Success -> CopMod.logger.info("[cop][croesus]   OK   ${r.chest.tierName}: cost=${r.chest.cost} value=${r.chest.totalValue} items=${r.chest.items.size}")
+                        }
+                    }
                 }
             } else if (lastChests.isNotEmpty()) {
                 lastChests = emptyList()
+                loggedParse = false
             }
         }
 
@@ -102,6 +116,10 @@ object AutoCroesus : Module(
             if (!showOverlay) return@on
             val screen = mc.screen as? AbstractContainerScreen<*> ?: return@on
             if (!CroesusParser.inRunMenu(screen)) return@on
+            if (!loggedDraw) {
+                loggedDraw = true
+                CopMod.logger.info("[cop][croesus] Draw.Post hit on '${screen.title.string}', lastChests=${lastChests.size}, showOverlay=$showOverlay")
+            }
             if (lastChests.isEmpty()) return@on
             renderProfitOverlay(ctx)
         }
@@ -140,6 +158,8 @@ object AutoCroesus : Module(
         lastChests = emptyList()
         cachedContainerId = -1
         ticksSinceParse = 0
+        loggedParse = false
+        loggedDraw = false
     }
 
     private fun drawSlotOutline(ctx: GuiGraphics, x: Int, y: Int, colour: Int, bw: Int) {
