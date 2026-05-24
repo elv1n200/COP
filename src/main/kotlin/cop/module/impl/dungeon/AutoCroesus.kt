@@ -234,6 +234,12 @@ object AutoCroesus : Module(
     private var confirmReadyAtTick = 0L
     private val CONFIRM_SYNC_DELAY_TICKS = 10L
 
+    /** Number of "Next Page" clicks issued in the current multi-run cycle.
+     *  Capped at [MAX_PAGES_PER_CYCLE] as a safety against a bug looping
+     *  through pages forever. Reset in [resetCycle] and [tryStartMultiRun]. */
+    private var pagesVisitedThisCycle = 0
+    private val MAX_PAGES_PER_CYCLE = 5
+
     /** Chest tier slot we sent the most recent click on (in the run sub-screen).
      *  Captured at click time so the back-out branch in [decideBuyOrReroll]
      *  can mark it [exhaustedSlotsThisRun] and stop tryStartClaim from re-
@@ -357,10 +363,18 @@ object AutoCroesus : Module(
                         val unclaimed = CroesusParser.findUnclaimedRunSlots(screen.menu)
                         if (unclaimed.isNotEmpty()) {
                             clickUnclaimedRun(unclaimed.first())
+                        } else if (tryAdvancePage(screen)) {
+                            // Clicked "Next Page" — page-turn happens in place
+                            // (same containerId, slot data refreshes). Reset
+                            // the sync timer so the next iteration waits the
+                            // full delay before re-scanning the new page.
+                            croesusReadyAtTick = 0L
                         } else {
                             completeMultiRun()
                         }
-                        croesusReadyAtTick = 0L
+                        // Reset after a click OR a complete — completeMultiRun
+                        // is harmless (state is IDLE after).
+                        if (claimState != ClaimState.IDLE) croesusReadyAtTick = 0L
                     }
                 } else {
                     // Slot data still arriving — reset and keep waiting.
@@ -736,6 +750,7 @@ object AutoCroesus : Module(
         pendingChestSlot = -1
         pendingChestInfo = null
         exhaustedSlotsThisRun.clear()
+        pagesVisitedThisCycle = 0
     }
 
     /** Try to reopen the Croesus menu by interacting with the nearby NPC
@@ -793,6 +808,7 @@ object AutoCroesus : Module(
         multiRunChestsThisCycle = 0
         multiRunRunsThisCycle = 0
         chainClaimsThisCycle = 0
+        pagesVisitedThisCycle = 0
         modMessage("&aAutoCroesus: starting multi-run cycle…")
         claimState = ClaimState.AWAIT_CROESUS_LIST
         claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
@@ -809,6 +825,26 @@ object AutoCroesus : Module(
         multiRunRunsThisCycle++
         claimState = ClaimState.AWAIT_RUN_SCREEN
         claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
+        return true
+    }
+
+    /** If the current page has no unclaimed runs but slot 53 is a "Next Page"
+     *  button, click it. Returns true if a page-turn click was sent (caller
+     *  should reset its sync timer); false if there's no next page or we've
+     *  hit the safety cap. Pure heuristic — slot 53 is the standard "Next
+     *  Page" position in Hypixel's 6-row paged GUIs. */
+    private fun tryAdvancePage(screen: AbstractContainerScreen<*>): Boolean {
+        if (pagesVisitedThisCycle >= MAX_PAGES_PER_CYCLE) return false
+        val stack = screen.menu.slots.getOrNull(53)?.item ?: return false
+        if (stack.isEmpty) return false
+        val name = stack.hoverName.string
+        if (!name.contains("Next Page", ignoreCase = true)) return false
+        if (!ContainerUtils.click(53)) return false
+        pagesVisitedThisCycle++
+        modMessage(
+            "&7AutoCroesus: page exhausted, advancing to page " +
+                "&f${pagesVisitedThisCycle + 1}&7…"
+        )
         return true
     }
 
