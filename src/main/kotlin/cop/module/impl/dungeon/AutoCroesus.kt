@@ -138,8 +138,10 @@ object AutoCroesus : Module(
 
         on<GuiEvent.Key.Press> {
             if (key == CatKeys.KEY_NONE || key != debugDumpKey.key) return@on
+            // Fires in any container screen so we can also dump the buy-confirm
+            // sub-menu (titled e.g. "Bedrock") and the reward-chest screen,
+            // not just the two parser-recognised ones.
             val screen = mc.screen as? AbstractContainerScreen<*> ?: return@on
-            if (!CroesusParser.inCroesusMenu(screen) && !CroesusParser.inRunMenu(screen)) return@on
             dumpScreen(screen)
             cancel()
         }
