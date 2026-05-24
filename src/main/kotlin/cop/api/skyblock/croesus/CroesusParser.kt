@@ -204,6 +204,10 @@ object CroesusParser {
             }
         }
         PriceClient.getBazaarSell(id)?.let { return it }
+        // Thinly-traded items often have sellPrice=0; fall back to buyPrice
+        // so they're not reported as worthless. See the AutoCroesus screenshot
+        // where Bank I had sellPrice=0 / buyPrice=5.9.
+        PriceClient.getBazaarBuy(id)?.let { return it }
         PriceClient.getLowestBin(id)?.let { return it }
         // Warm the per-item LBIN cache so subsequent overlay frames get a real
         // number — first call returns 0, the fetch finishes within ~200ms.
