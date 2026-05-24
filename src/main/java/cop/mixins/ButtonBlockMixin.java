@@ -1,6 +1,6 @@
 package cop.mixins;
 
-import cop.module.impl.dungeon.FullBlockHitboxes;
+import cop.module.impl.dungeon.worldrender.FullBlockHitboxes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.block.ButtonBlock;

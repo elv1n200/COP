@@ -1,7 +1,7 @@
 package cop.utils
 
 import cop.module.impl.misc.Test
-import cop.module.impl.dungeon.SecretTriggerBot
+import cop.module.impl.dungeon.cheats.SecretTriggerBot
 /**
  * Usage:
  * [Test.tickerExample]

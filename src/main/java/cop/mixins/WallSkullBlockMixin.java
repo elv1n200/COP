@@ -1,7 +1,7 @@
 package cop.mixins;
 
 import cop.mixininterfaces.IOriginalCollisionShapeProvider;
-import cop.module.impl.dungeon.FullBlockHitboxes;
+import cop.module.impl.dungeon.worldrender.FullBlockHitboxes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.BlockGetter;
