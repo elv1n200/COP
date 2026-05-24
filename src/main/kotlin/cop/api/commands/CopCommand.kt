@@ -83,6 +83,9 @@ object CopCommand {
                 val ageLabel = if (pc.isLoaded) "${pc.ageMs / 1000}s" else "never"
 
                 // --- enchant-book form ---
+                // Enchant books live on the BAZAAR with ids ENCHANTMENT_<NAME>_<LVL>
+                // (ultimates keep the ULTIMATE_ prefix in the name). The bulk
+                // refresh already populates all of them — we just look up.
                 if (parts[0].equals("book", true)) {
                     if (parts.size < 3) {
                         modMessage("&cUsage: /copdev pricetest book <ENCHANT_NAME> <level>")
@@ -93,12 +96,14 @@ object CopCommand {
                         modMessage("&cLevel must be an integer.")
                         return@invoke
                     }
-                    modMessage("&7Fetching enchant book ${name} ${level}...")
-                    pc.fetchEnchantBookPrice(name, level) { lb ->
+                    modMessage("&7Fetching enchant book ${name} ${level} (cache age=$ageLabel)...")
+                    pc.refreshIfStale {
                         mc.execute {
+                            val price = pc.getEnchantBookPrice(name, level)
+                            pc.lastError?.let { modMessage("&eBulk fetch issues: &f$it") }
                             modMessage(
-                                "&bPrice for &fENCHANTED_BOOK[$name=$level]&7:" +
-                                    "\n  &7lowest BIN:  " + (lb?.let { "&a${pc.formatPrice(it)}" } ?: "&8n/a")
+                                "&bPrice for &fENCHANTMENT_${name}_${level}&7:" +
+                                    "\n  &7bazaar sell: " + (price?.let { "&a${pc.formatPrice(it)}" } ?: "&8n/a")
                             )
                         }
                     }
