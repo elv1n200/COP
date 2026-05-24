@@ -65,6 +65,22 @@ object CroesusParser {
     /** Run-sub-menu titles. Hypixel formats both regular and master mode this way. */
     private val RUN_TITLE_REGEX = Regex("^(?:Master )?Catacombs - .+$")
 
+    /** Buy-confirm screen — opened by clicking a chest tier in the run sub-screen.
+     *  Title is just the tier name (`Wood`, `Gold`, …, `Bedrock`). 6-row chest;
+     *  the buy button sits at [BUY_CONFIRM_SLOT], go-back at [BUY_BACK_SLOT],
+     *  kismet/reroll at [BUY_REROLL_SLOT]. Slot layout verified via debug dump. */
+    private val BUY_CONFIRM_TITLE_REGEX =
+        Regex("^(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)$")
+
+    /** "Open Reward Chest" — clicking this deducts the cost and drops the
+     *  loot straight into the player's inventory (no separate reward GUI). */
+    const val BUY_CONFIRM_SLOT: Int = 31
+    /** "Go Back" button — returns to the run sub-screen. */
+    const val BUY_BACK_SLOT: Int = 49
+    /** "Reroll Chest" (kismet feather). Not used by Phase 3a; reserved for
+     *  the reroll driver in Phase 4. */
+    const val BUY_REROLL_SLOT: Int = 50
+
     // -- GUI detection ----------------------------------------------------------
 
     fun inCroesusMenu(screen: Screen?): Boolean =
@@ -72,6 +88,10 @@ object CroesusParser {
 
     fun inRunMenu(screen: Screen?): Boolean =
         screen is AbstractContainerScreen<*> && RUN_TITLE_REGEX.matches(screen.title.string.trim())
+
+    fun inBuyConfirmMenu(screen: Screen?): Boolean =
+        screen is AbstractContainerScreen<*> &&
+            BUY_CONFIRM_TITLE_REGEX.matches(screen.title.string.trim())
 
     // -- Run-selection screen ---------------------------------------------------
 
