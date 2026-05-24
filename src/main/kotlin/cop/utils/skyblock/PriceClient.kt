@@ -120,30 +120,23 @@ object PriceClient {
     // separate cache, separate fetch, or any AH path — the bulk bazaar refresh
     // already has all 762 of them populated as soon as it runs.
 
-    /** Best-available bazaar price for the enchant book matching the given NBT
-     *  enchant key (e.g. `sharpness`, `ultimate_combo`) at the given level, or
-     *  null if no such book is on bazaar.
-     *
-     *  Strategy: try sellPrice (instant-sell) first; if that's missing/0,
-     *  fall back to buyPrice (what sellers list at) — for thinly-traded books
-     *  like Bank I the sellPrice can sit at 0 with no buyers, but the item is
-     *  still worth ~buyPrice if you post a sell order.
+    /** Bazaar instant-sell price for the enchant book matching the given NBT
+     *  enchant key (e.g. `sharpness`, `ultimate_combo`) at the given level.
+     *  Returns 0 if the book is on bazaar but no one's currently buying
+     *  (genuinely worthless for instant-sale), or null if the book isn't on
+     *  bazaar at all (caller may want to try the AH).
      *
      *  Convenience: if the caller dropped the `ULTIMATE_` prefix (typing `combo`
      *  for an ultimate enchant), we try the ultimate id as a fallback so
      *  `getEnchantBookPrice("combo", 5)` still works. */
     fun getEnchantBookPrice(enchantName: String, level: Int): Double? {
         val name = enchantName.uppercase()
-        bazaarPriceFor("ENCHANTMENT_${name}_$level")?.let { return it }
+        bazaarSell["ENCHANTMENT_${name}_$level"]?.let { return it }
         if (!name.startsWith("ULTIMATE_")) {
-            bazaarPriceFor("ENCHANTMENT_ULTIMATE_${name}_$level")?.let { return it }
+            bazaarSell["ENCHANTMENT_ULTIMATE_${name}_$level"]?.let { return it }
         }
         return null
     }
-
-    /** Best bazaar price for an item — sellPrice if it exists, else buyPrice. */
-    private fun bazaarPriceFor(id: String): Double? =
-        bazaarSell[id] ?: bazaarBuy[id]
 
     /** Best-effort: ensure this item's LBIN is fresh in cache. Fire-and-forget;
      *  if data is older than [LBIN_TTL_MS] (or missing entirely), kicks off a
@@ -241,10 +234,15 @@ object PriceClient {
             bazaarBuy.clear()
             for ((id, json) in products.entrySet()) {
                 val qs = json.asJsonObject.getAsJsonObject("quick_status") ?: continue
-                // sellPrice = price you'd get instant-selling (highest active buy order).
-                // buyPrice  = price you'd pay instant-buying (lowest active sell order).
-                qs.get("sellPrice")?.asDouble?.takeIf { it > 0 }?.let { bazaarSell[id] = it }
-                qs.get("buyPrice")?.asDouble?.takeIf { it > 0 }?.let { bazaarBuy[id] = it }
+                // Store BOTH prices even when 0 — for getBazaarSell the
+                // presence-in-map (vs absent) means "is on bazaar at all"
+                // and 0 means "on bazaar, but no buyers right now". That
+                // distinction matters because chest profit should NOT pretend
+                // a book is worth its listed buyPrice (you'd have to wait days
+                // for that, and the price can move) — sellPrice is what you'd
+                // actually get if you converted the item to coins now.
+                qs.get("sellPrice")?.asDouble?.let { bazaarSell[id] = it }
+                qs.get("buyPrice")?.asDouble?.let { bazaarBuy[id] = it }
             }
         }
     }
