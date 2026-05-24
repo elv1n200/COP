@@ -38,20 +38,28 @@ object CroesusParser {
      *  These are stable across floors — only some are populated for any given run. */
     private val CHEST_SLOT_INDICES = intArrayOf(11, 12, 13, 14, 15)
 
-    /** A run still has unopened chests if any of its tooltip lines is this exact
-     *  marker. Hypixel always sends it (with the legacy color prefix). */
-    const val LORE_UNCLAIMED_MARKER: String = "§5§o§cNo chests opened yet!"
+    /** A run still has unopened chests if any of its tooltip lines (plain text,
+     *  formatting stripped) contains this substring. The CT script compared
+     *  against the exact legacy-encoded string `§5§o§cNo chests opened yet!`,
+     *  but in modern MC the lore is sent as a proper Component with style on
+     *  the node itself — so the matcher works on the plain `.string` instead
+     *  and is immune to whatever colour codes Hypixel attaches. */
+    const val LORE_UNCLAIMED_MARKER: String = "No chests opened yet"
 
-    private val CHEST_TITLE_REGEX = Regex("^(§.)(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)$")
-    /** Hypixel chest cost line: "§5§o§61,234 Coins" (the §5§o is the lore-prefix
-     *  Minecraft adds to all enchanted-item lore lines). */
-    private val COST_REGEX = Regex("^§5§o§6([\\d,]+) Coins$")
+    /** Chest tier names today: `§7Wood Chest`, `§6Gold Chest`, …; the legacy CT
+     *  regex required no suffix. We match plain text (no colour code group) and
+     *  recover the tier colour via [tierColourCode] from a hardcoded mapping. */
+    private val CHEST_TITLE_REGEX = Regex("^(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)(?: Chest)?$")
+    private val COST_REGEX = Regex("^([\\d,]+) Coins$")
+    private const val COST_FREE = "FREE"
 
-    private val BOOK_REGEX = Regex(
-        // §5§oEnchanted Book (§d§lUltimate Combo VI§a)  /  §5§oEnchanted Book (Sharpness VII§a)
+    /** Lore line for an enchanted book. We keep the §-codes here because we
+     *  need the `§d§l` prefix to distinguish ultimate from regular enchants. */
+    private val BOOK_REGEX_FORMATTED = Regex(
         "^(?:§.)*Enchanted Book \\((§d§l)?([\\w ]+) (\\w+)(?:§.)*\\)\$"
     )
-    private val ESSENCE_REGEX = Regex("^§5§o§d(\\w+) Essence §8x(\\d+)$")
+    /** Plain-text essence line, e.g. `Wither Essence x16`. */
+    private val ESSENCE_REGEX = Regex("^(\\w+) Essence x(\\d+)$")
     private val NUMERAL_VALUES = mapOf('I' to 1, 'V' to 5, 'X' to 10, 'L' to 50, 'C' to 100, 'D' to 500, 'M' to 1000)
 
     /** Run-sub-menu titles. Hypixel formats both regular and master mode this way. */
@@ -67,9 +75,9 @@ object CroesusParser {
 
     // -- Run-selection screen ---------------------------------------------------
 
-    /** Slot indices on the top-level Croesus screen whose tooltip says
-     *  "No chests opened yet!". The overlay uses these to highlight runs
-     *  the user hasn't claimed yet. */
+    /** Slot indices on the top-level Croesus screen whose tooltip contains
+     *  "No chests opened yet". The overlay uses these to highlight runs the
+     *  user hasn't claimed yet. */
     fun findUnclaimedRunSlots(menu: AbstractContainerMenu): List<Int> {
         val out = mutableListOf<Int>()
         // The run icons live in the upper portion of the chest GUI; iterate
@@ -77,11 +85,18 @@ object CroesusParser {
         // catch runs on later pages without hardcoding a page layout.
         val end = (menu.slots.size - 36).coerceAtMost(54)
         for (i in 0 until end) {
-            val lore = loreFormatted(menu, i) ?: continue
-            if (lore.any { it == LORE_UNCLAIMED_MARKER }) out += i
+            val lore = lorePlain(menu, i) ?: continue
+            if (lore.any { LORE_UNCLAIMED_MARKER in it }) out += i
         }
         return out
     }
+
+    /** Static lookup so the overlay can colour each tier the way Hypixel does
+     *  even though we strip formatting when parsing the item name. */
+    private val TIER_COLOUR_CODE = mapOf(
+        "Wood" to "§7", "Gold" to "§6", "Diamond" to "§b",
+        "Emerald" to "§a", "Obsidian" to "§5", "Bedrock" to "§c",
+    )
 
     // -- Run sub-screen ---------------------------------------------------------
 
@@ -92,21 +107,28 @@ object CroesusParser {
     fun parseChests(menu: AbstractContainerMenu): List<ChestParseResult> {
         val results = mutableListOf<ChestParseResult>()
         // Iterate the top three rows (0..26) — chest tier icons can sit in
-        // various positions across floors, so we filter by regex on the name.
+        // various positions across floors, so we filter by name match.
         val end = (menu.slots.size - 36).coerceAtMost(27)
         for (i in 0 until end) {
             val slot = menu.slots.getOrNull(i) ?: continue
             val stack = slot.item ?: continue
             if (stack.isEmpty) continue
 
-            val nameFormatted = stack.hoverName.formattedString
-            val titleMatch = CHEST_TITLE_REGEX.matchEntire(nameFormatted) ?: continue
-            val (_, colourCode, tierName) = titleMatch.destructured
+            // Match on plain text — hover name with all formatting stripped.
+            val plainName = stack.hoverName.string.trim()
+            val titleMatch = CHEST_TITLE_REGEX.matchEntire(plainName) ?: continue
+            val tierName = titleMatch.groupValues[1]
+            val colourCode = TIER_COLOUR_CODE[tierName] ?: "§7"
 
-            val lore = loreFormatted(menu, i) ?: run {
+            // Read lore both ways: plain for marker / item lookups, formatted
+            // for the few places we need the §-code (ultimate book detection).
+            val lorePlain = lorePlain(menu, i) ?: run {
                 results += ChestParseResult.Failure(tierName, "no lore"); continue
             }
-            results += parseChestLore(i, tierName, colourCode, lore)
+            val loreFormatted = loreFormatted(menu, i) ?: run {
+                results += ChestParseResult.Failure(tierName, "no lore"); continue
+            }
+            results += parseChestLore(i, tierName, colourCode, lorePlain, loreFormatted)
         }
         return results
     }
@@ -115,36 +137,52 @@ object CroesusParser {
         slot: Int,
         tierName: String,
         colourCode: String,
-        lore: List<String>,
+        lorePlain: List<String>,
+        loreFormatted: List<String>,
     ): ChestParseResult {
-        // Hypixel's chest tooltip layout, in order:
-        //   [0] §5§o(blank or header)
-        //   [1] §5§o (separator)
-        //   [2..lootEnd-1]  one line per item (formatted)
-        //   [lootEnd]       §5§o (blank separator marking end of loot)
-        //   ...later...     §5§o§7Cost
-        //                   <cost line>
-        val lootEnd = lore.indexOf("§5§o")
-        val costIdx = lore.indexOf("§5§o§7Cost")
-        if (lootEnd < 0 || costIdx < 0 || costIdx + 1 >= lore.size) {
-            return ChestParseResult.Failure(tierName, "no loot end / no cost marker")
+        // Hypixel's chest tooltip layout:
+        //   line 0..2:  header lines (chest name, separator, etc)
+        //   item lines: one per loot entry (e.g. "Enchanted Diamond x16")
+        //   blank line
+        //   "Cost"  ← header
+        //   "<X> Coins"  or  "FREE"
+        //   ... more lines after (modifiers, footer, etc)
+        //
+        // We find the "Cost" header by plain text, then take everything between
+        // it (working backwards through blank lines) and an earlier blank line
+        // as the loot section. This is more robust to layout changes than the
+        // old fixed-index slicing.
+        val costIdx = lorePlain.indexOfFirst { it.trim() == "Cost" }
+        if (costIdx < 0 || costIdx + 1 >= lorePlain.size) {
+            return ChestParseResult.Failure(tierName, "no Cost marker in lore")
         }
-
-        val costLine = lore[costIdx + 1]
+        val costLine = lorePlain[costIdx + 1].trim()
         val cost = parseCost(costLine)
-            ?: return ChestParseResult.Failure(tierName, "unparseable cost: $costLine")
+            ?: return ChestParseResult.Failure(tierName, "unparseable cost: \"$costLine\"")
 
-        val itemLines = lore.subList(2, lootEnd)
+        // Walk backwards from the line above "Cost" — skip the blank separator,
+        // then collect non-blank lines until we hit another blank or the top.
+        val lootEnd = (costIdx - 1).coerceAtLeast(0)
+        var firstLoot = lootEnd
+        while (firstLoot > 0 && lorePlain[firstLoot].isNotBlank()) firstLoot--
+        // firstLoot is now either 0 or sitting on a blank line; start one past it.
+        if (lorePlain[firstLoot].isBlank()) firstLoot++
+
         val items = mutableListOf<RewardItem>()
         var totalValue = 0.0
-        for (line in itemLines) {
-            val (id, qty) = tryParseLine(line)
-                ?: return ChestParseResult.Failure(tierName, "unparseable line: ${line.noControlCodes}")
+        for (i in firstLoot until lootEnd + 1) {
+            val plain = lorePlain.getOrNull(i)?.trim() ?: continue
+            if (plain.isEmpty()) continue
+            val formatted = loreFormatted.getOrNull(i) ?: plain
+            val (id, qty) = tryParseLine(plain, formatted)
+                ?: return ChestParseResult.Failure(tierName, "unparseable line: \"$plain\"")
             val price = PriceClient.getBazaarSell(id)
                 ?: PriceClient.getLowestBin(id)
                 ?: 0.0  // unknown -> treat as 0 (we still warm the LBIN cache below)
-            if (PriceClient.getLowestBin(id) == null) PriceClient.ensureLowestBin(id)
-            items += RewardItem(id, qty, price, line)
+            if (PriceClient.getLowestBin(id) == null && PriceClient.getBazaarSell(id) == null) {
+                PriceClient.ensureLowestBin(id)
+            }
+            items += RewardItem(id, qty, price, formatted)
             totalValue += price * qty
         }
         val sorted = items.sortedByDescending { it.unitValue * it.qty }
@@ -154,7 +192,7 @@ object CroesusParser {
     }
 
     private fun parseCost(line: String): Double? {
-        if (line == "§5§o§aFREE") return 0.0
+        if (line.equals(COST_FREE, ignoreCase = true)) return 0.0
         val m = COST_REGEX.matchEntire(line) ?: return null
         return m.groupValues[1].replace(",", "").toDoubleOrNull()
     }
@@ -162,14 +200,17 @@ object CroesusParser {
     // -- Single-line parsing (book / essence / item) ----------------------------
 
     /** Returns (skyblockId, qty) or null if the line is something we don't
-     *  recognise (the overlay will show a "?" for that chest). */
-    private fun tryParseLine(line: String): Pair<String, Int>? {
-        tryParseBook(line)?.let { return it }
-        tryParseEssence(line)?.let { return it }
+     *  recognise (the overlay will show a "?" for that chest).
+     *
+     *  Takes both [plain] (formatting stripped, used for most matches and the
+     *  items-registry display-name lookup) and [formatted] (with § codes,
+     *  needed only to distinguish ultimate from regular enchanted books). */
+    private fun tryParseLine(plain: String, formatted: String): Pair<String, Int>? {
+        tryParseBook(formatted)?.let { return it }
+        tryParseEssence(plain)?.let { return it }
 
-        // Last resort: strip formatting and ask the items registry for the id.
-        // Many regular items have a "x N" suffix we have to peel off first.
-        val plain = line.noControlCodes.trim()
+        // Last resort: ask the items registry for the id by display name.
+        // Many regular items have an "x N" suffix we have to peel off first.
         val qtyMatch = Regex("^(.+?) x(\\d+)$").matchEntire(plain)
         val (namePart, qty) = if (qtyMatch != null) {
             qtyMatch.groupValues[1] to qtyMatch.groupValues[2].toInt()
@@ -179,8 +220,8 @@ object CroesusParser {
         return id to qty
     }
 
-    private fun tryParseBook(line: String): Pair<String, Int>? {
-        val m = BOOK_REGEX.matchEntire(line) ?: return null
+    private fun tryParseBook(formatted: String): Pair<String, Int>? {
+        val m = BOOK_REGEX_FORMATTED.matchEntire(formatted) ?: return null
         val ultPrefix = m.groupValues[1]  // "§d§l" if ultimate, else empty
         val rawName = m.groupValues[2]     // "Ultimate Combo" or "Sharpness"
         val tierStr = m.groupValues[3]
@@ -194,8 +235,8 @@ object CroesusParser {
         return id to 1
     }
 
-    private fun tryParseEssence(line: String): Pair<String, Int>? {
-        val m = ESSENCE_REGEX.matchEntire(line) ?: return null
+    private fun tryParseEssence(plain: String): Pair<String, Int>? {
+        val m = ESSENCE_REGEX.matchEntire(plain.trim()) ?: return null
         val type = m.groupValues[1].uppercase()
         val qty = m.groupValues[2].toIntOrNull() ?: 1
         return "ESSENCE_$type" to qty
@@ -215,12 +256,21 @@ object CroesusParser {
 
     // -- Helpers ----------------------------------------------------------------
 
-    /** Lore lines of a slot's item, with § formatting codes preserved (so the
-     *  Hypixel-shaped regexes here can match them). */
-    private fun loreFormatted(menu: AbstractContainerMenu, slotIndex: Int): List<String>? {
+    /** Lore lines of a slot's item, with § formatting codes preserved.
+     *  Needed only for the ultimate-book detection (`§d§l` prefix). */
+    fun loreFormatted(menu: AbstractContainerMenu, slotIndex: Int): List<String>? {
         val stack = menu.slots.getOrNull(slotIndex)?.item ?: return null
         if (stack.isEmpty) return null
         val lore = stack.get(DataComponents.LORE) ?: return null
         return lore.lines.map { it.formattedString }
+    }
+
+    /** Lore lines of a slot's item with all formatting stripped — what we use
+     *  for marker detection and item-name lookups. */
+    fun lorePlain(menu: AbstractContainerMenu, slotIndex: Int): List<String>? {
+        val stack = menu.slots.getOrNull(slotIndex)?.item ?: return null
+        if (stack.isEmpty) return null
+        val lore = stack.get(DataComponents.LORE) ?: return null
+        return lore.lines.map { it.string }
     }
 }

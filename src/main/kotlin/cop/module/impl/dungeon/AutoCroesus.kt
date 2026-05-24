@@ -83,7 +83,9 @@ object AutoCroesus : Module(
             if (!CroesusParser.inCroesusMenu(screen)) return@on
             val stack = slot.item.takeUnless { it.isEmpty } ?: return@on
             val lore = stack.get(DataComponents.LORE) ?: return@on
-            val hasMarker = lore.lines.any { it.formattedString == CroesusParser.LORE_UNCLAIMED_MARKER }
+            // Plain-text contains — works regardless of which colour codes
+            // Hypixel wraps the line in (see CroesusParser.LORE_UNCLAIMED_MARKER).
+            val hasMarker = lore.lines.any { CroesusParser.LORE_UNCLAIMED_MARKER in it.string }
             if (!hasMarker) return@on
             drawSlotOutline(ctx, slot.x, slot.y, unclaimedColour.rgb, borderWidth)
         }

@@ -62,6 +62,34 @@ object CopCommand {
                 mc.keyboardHandler.clipboard = string.string
             }
 
+            // Dumps the currently-open chest GUI: title + every non-empty slot
+            // in the top three rows with its plain item name and lore. Used to
+            // verify the AutoCroesus parser against actual Hypixel data.
+            // Output goes to the game log (latest.log) so multi-line tooltips
+            // don't blow up the chat.
+            "croesusdump" {
+                val screen = mc.screen as? net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<*>
+                if (screen == null) {
+                    modMessage("&cOpen the Croesus / run GUI first.")
+                    return@invoke
+                }
+                val title = screen.title.string
+                val menu = screen.menu
+                val end = (menu.slots.size - 36).coerceAtMost(27)
+                val log = cop.CopMod.logger
+                log.info("[cop] CroesusDump — title=\"$title\", slots=${menu.slots.size}")
+                for (i in 0 until end) {
+                    val stack = menu.slots.getOrNull(i)?.item ?: continue
+                    if (stack.isEmpty) continue
+                    val name = stack.hoverName.string
+                    val lore = stack.get(net.minecraft.core.component.DataComponents.LORE)
+                        ?.lines?.map { it.string } ?: emptyList()
+                    log.info("[cop]   slot=$i name=\"$name\"")
+                    for ((j, line) in lore.withIndex()) log.info("[cop]     lore[$j]=\"$line\"")
+                }
+                modMessage("&aDumped GUI \"$title\" to latest.log (${end} top slots scanned).")
+            }
+
             // Phase-1 sanity check for the Auto Croesus price client.
             // Usage:
             //   /copdev pricetest <ITEM_ID or display name>          (regular item)
