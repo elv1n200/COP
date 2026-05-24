@@ -91,6 +91,12 @@ object AutoCroesus : Module(
         desc = "Abort the in-flight claim if the buy-confirm screen doesn't open within N ticks (20 = 1 second).",
         unit = "t"
     )
+    private val chainClaim by switch(
+        "Chain claim (this run)", false,
+        desc = "After a successful buy, automatically return to the run sub-screen, re-parse, " +
+            "and claim the next chest above the threshold. Stops cleanly when no chest meets " +
+            "the threshold. Per-run only — does not navigate between runs (Phase 3c)."
+    )
 
     /** Cached parser output for the currently-open run sub-screen. */
     @Volatile private var lastChests: List<ChestParseResult> = emptyList()
@@ -98,47 +104,72 @@ object AutoCroesus : Module(
     private var cachedContainerId: Int = -1
     private var ticksSinceParse = 0
 
-    /** Two states are enough for Phase 3a: either we're idle, or we sent the
-     *  chest-tier click and are waiting for Hypixel to open the buy-confirm. */
-    private enum class ClaimState { IDLE, AWAIT_CONFIRM }
+    /** The claim driver's state machine.
+     *   - IDLE             — nothing in flight; keybind is the only way in.
+     *   - AWAIT_CONFIRM    — sent chest-tier click, waiting for Hypixel to open
+     *                        the buy-confirm screen so we can press "Open Reward Chest".
+     *   - AWAIT_NEXT_PARSE — chain mode only. Sent the buy click; waiting for
+     *                        the run sub-screen to reappear with freshly-parsed
+     *                        contents so we can pick the next-best chest. */
+    private enum class ClaimState { IDLE, AWAIT_CONFIRM, AWAIT_NEXT_PARSE }
     @Volatile private var claimState = ClaimState.IDLE
     /** Monotonic tick counter, only used to schedule the claim timeout. */
     private var monotonicTick = 0L
     private var claimDeadlineTick = 0L
     /** Tier display label captured at click time, used in the success chat line. */
     private var pendingTier = ""
+    /** Counter for the per-cycle chat summary at the end of a chain. */
+    private var chainClaimsThisCycle = 0
 
     init {
         // Wipe parser cache whenever a GUI opens/closes — stale data from the
         // previous run would otherwise leak into the next overlay.
         on<GuiEvent.Close> {
             reset()
-            // GUI closed mid-claim: server may or may not have completed the
-            // sequence. Either way reset state so the next attempt is clean.
-            if (claimState != ClaimState.IDLE) {
+            // Only abort on close while waiting for the buy-confirm — that's
+            // unambiguously a failed transition. AWAIT_NEXT_PARSE is fine to
+            // ride through close+open transitions (server may briefly close
+            // the run sub-screen before reopening it); the deadline check
+            // catches genuine failures.
+            if (claimState == ClaimState.AWAIT_CONFIRM) {
                 modMessage("&7AutoCroesus: GUI closed mid-claim — state reset.")
                 claimState = ClaimState.IDLE
+                chainClaimsThisCycle = 0
             }
         }
         on<GuiEvent.Open> {
             reset()
-            // Phase 3a step 2 — the buy-confirm just opened. Click the
-            // "Open Reward Chest" button and we're done; loot drops straight
-            // into the inventory, the screen closes server-side.
+            // Step 2 — buy-confirm just opened. Click "Open Reward Chest";
+            // loot drops straight into inventory, screen closes server-side.
             if (claimState == ClaimState.AWAIT_CONFIRM) {
                 if (CroesusParser.inBuyConfirmMenu(screen)) {
                     if (ContainerUtils.click(CroesusParser.BUY_CONFIRM_SLOT)) {
+                        chainClaimsThisCycle++
                         modMessage("&a✓ AutoCroesus: bought &r$pendingTier&a chest.")
+                        if (chainClaim) {
+                            // Hand off to AWAIT_NEXT_PARSE; the run sub-screen
+                            // will reopen and the parse loop will pick up the
+                            // next-best chest. Give a generous timeout — the
+                            // close→open cycle can take longer than a single
+                            // chest-click roundtrip.
+                            claimState = ClaimState.AWAIT_NEXT_PARSE
+                            claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
+                        } else {
+                            claimState = ClaimState.IDLE
+                            chainClaimsThisCycle = 0
+                        }
                     } else {
                         modMessage("&cAutoCroesus: buy-confirm opened but click failed " +
                             "(no container id).")
+                        claimState = ClaimState.IDLE
+                        chainClaimsThisCycle = 0
                     }
-                    claimState = ClaimState.IDLE
                 } else {
                     // Some other screen opened instead — abort defensively.
                     val title = (screen as? AbstractContainerScreen<*>)?.title?.string ?: "?"
                     modMessage("&cAutoCroesus: aborted — expected buy-confirm, got \"$title\".")
                     claimState = ClaimState.IDLE
+                    chainClaimsThisCycle = 0
                 }
             }
         }
@@ -147,9 +178,10 @@ object AutoCroesus : Module(
             // Monotonic tick — drives the claim timeout. Wraps after ~14
             // billion years so overflow is not a concern.
             monotonicTick++
-            if (claimState == ClaimState.AWAIT_CONFIRM && monotonicTick >= claimDeadlineTick) {
-                modMessage("&cAutoCroesus: timeout waiting for buy-confirm — aborting.")
+            if (claimState != ClaimState.IDLE && monotonicTick >= claimDeadlineTick) {
+                modMessage("&cAutoCroesus: timeout (state=$claimState) — aborting.")
                 claimState = ClaimState.IDLE
+                chainClaimsThisCycle = 0
             }
 
             val screen = mc.screen as? AbstractContainerScreen<*>
@@ -176,6 +208,14 @@ object AutoCroesus : Module(
                 if (lastChests.isEmpty() || ticksSinceParse >= refreshTicks) {
                     lastChests = CroesusParser.parseChests(screen.menu)
                     ticksSinceParse = 0
+                }
+
+                // Chain mode: we just bought a chest and are waiting for fresh
+                // parser data on the reopened run sub-screen. As soon as we
+                // have a non-empty parse result, kick off the next claim.
+                if (claimState == ClaimState.AWAIT_NEXT_PARSE && lastChests.isNotEmpty()) {
+                    claimState = ClaimState.IDLE  // tryStartClaim requires IDLE
+                    tryStartClaim(screen, fromChain = true)
                 }
             } else if (lastChests.isNotEmpty()) {
                 lastChests = emptyList()
@@ -239,20 +279,26 @@ object AutoCroesus : Module(
     }
 
     /** Validates preconditions, picks the best chest, sends the first click,
-     *  and transitions to AWAIT_CONFIRM. Any failure path explains itself
-     *  in chat so the user knows why nothing happened. */
-    private fun tryStartClaim(screen: AbstractContainerScreen<*>) {
+     *  and transitions to AWAIT_CONFIRM.
+     *
+     *  When [fromChain] is true the call comes from the chain driver (not a
+     *  keybind press), so:
+     *    - precondition failures don't shout in chat (the driver tried best
+     *      effort, no user attention needed),
+     *    - "no chest above threshold" prints a friendly summary that the
+     *      chain has finished, including how many chests it claimed. */
+    private fun tryStartClaim(screen: AbstractContainerScreen<*>, fromChain: Boolean = false) {
         if (!autoClaim) {
-            modMessage("&cAutoCroesus: turn on the &fAuto claim (master)&c switch first.")
+            if (!fromChain) modMessage("&cAutoCroesus: turn on the &fAuto claim (master)&c switch first.")
             return
         }
         if (!CroesusParser.inRunMenu(screen)) {
-            modMessage("&cAutoCroesus: claim key only works inside a run sub-screen " +
+            if (!fromChain) modMessage("&cAutoCroesus: claim key only works inside a run sub-screen " +
                 "(\"Catacombs - Floor X\" / \"Master Catacombs - Floor X\").")
             return
         }
         if (claimState != ClaimState.IDLE) {
-            modMessage("&cAutoCroesus: already claiming (state=$claimState) — wait or close GUI.")
+            if (!fromChain) modMessage("&cAutoCroesus: already claiming (state=$claimState) — wait or close GUI.")
             return
         }
         val best: ChestInfo? = lastChests
@@ -260,20 +306,33 @@ object AutoCroesus : Module(
             .maxByOrNull { it.chest.profit }
             ?.chest
         if (best == null) {
-            modMessage("&cAutoCroesus: no chests parsed yet — wait a moment for the overlay.")
+            if (!fromChain) modMessage("&cAutoCroesus: no chests parsed yet — wait a moment for the overlay.")
             return
         }
         if (best.profit < minProfit) {
-            modMessage(
-                "&cAutoCroesus: best chest profit &f${PriceClient.formatPrice(best.profit)}&c " +
-                    "below threshold &f${PriceClient.formatPrice(minProfit.toDouble())}&c — refusing."
-            )
+            if (fromChain) {
+                modMessage(
+                    "&aAutoCroesus chain complete — bought $chainClaimsThisCycle chest" +
+                        (if (chainClaimsThisCycle == 1) "" else "s") +
+                        "; next-best (&r${best.tierColourCode}${best.tierName}&a) profit " +
+                        "&f${PriceClient.formatPrice(best.profit)}&a is below threshold."
+                )
+                chainClaimsThisCycle = 0
+            } else {
+                modMessage(
+                    "&cAutoCroesus: best chest profit &f${PriceClient.formatPrice(best.profit)}&c " +
+                        "below threshold &f${PriceClient.formatPrice(minProfit.toDouble())}&c — refusing."
+                )
+            }
             return
         }
         if (!ContainerUtils.click(best.slot)) {
             modMessage("&cAutoCroesus: click failed (no container id tracked).")
             return
         }
+        // Manual start clears the per-cycle counter so chained-then-aborted-
+        // then-manual flows don't add up across unrelated sessions.
+        if (!fromChain) chainClaimsThisCycle = 0
         claimState = ClaimState.AWAIT_CONFIRM
         claimDeadlineTick = monotonicTick + claimTimeoutTicks.toLong()
         pendingTier = "${best.tierColourCode}${best.tierName}"
