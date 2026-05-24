@@ -145,15 +145,17 @@ object AutoCroesus : Module(
         }
     }
 
-    /** Logs the current GUI's title + every top-section slot's name + lore so
-     *  the parser can be debugged against real Hypixel data. Output goes to
-     *  the game log because chat isn't usable inside container screens. */
+    /** Logs the current GUI's title + every non-empty slot (chest area only,
+     *  player inv excluded) with name + lore so the parser can be debugged
+     *  against real Hypixel data. Output goes to the game log because chat
+     *  isn't usable inside container screens. */
     private fun dumpScreen(screen: AbstractContainerScreen<*>) {
         val title = screen.title.string
         val menu = screen.menu
-        val end = (menu.slots.size - 36).coerceAtMost(27)
+        // Whole chest area (everything except the player inventory tail).
+        val end = (menu.slots.size - 36).coerceAtLeast(0)
         val log = CopMod.logger
-        log.info("[cop] CroesusDump — title=\"$title\", slots=${menu.slots.size}")
+        log.info("[cop] CroesusDump — title=\"$title\", slots=${menu.slots.size}, chestArea=$end")
         for (i in 0 until end) {
             val stack = menu.slots.getOrNull(i)?.item ?: continue
             if (stack.isEmpty) continue
@@ -163,7 +165,7 @@ object AutoCroesus : Module(
             for ((j, line) in lore.withIndex()) log.info("[cop]     lore[$j]=\"$line\"")
         }
         // Confirmation message — visible once the player closes the GUI.
-        modMessage("&aDumped \"$title\" to latest.log (${end} top slots scanned).")
+        modMessage("&aDumped \"$title\" to latest.log ($end chest-area slots scanned).")
     }
 
     private fun reset() {
