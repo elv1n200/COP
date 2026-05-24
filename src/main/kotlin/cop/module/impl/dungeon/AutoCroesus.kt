@@ -227,6 +227,23 @@ object AutoCroesus : Module(
             // opens are instant (cached for 30 min).
             PriceClient.refreshIfStale()
 
+            // Multi-run polling: in AWAIT_CROESUS_LIST, retry the unclaimed
+            // scan each tick until either (a) we find an unclaimed run to
+            // click, or (b) slot data has fully loaded but there are none
+            // left. Slot 4 (the Croesus info icon) being non-empty is the
+            // signal that Hypixel has finished sending slot updates.
+            if (claimState == ClaimState.AWAIT_CROESUS_LIST &&
+                CroesusParser.inCroesusMenu(screen)) {
+                val unclaimed = CroesusParser.findUnclaimedRunSlots(screen.menu)
+                if (unclaimed.isNotEmpty()) {
+                    clickUnclaimedRun(unclaimed.first())
+                } else {
+                    val populated = screen.menu.slots.getOrNull(4)?.item?.isEmpty == false
+                    if (populated) completeMultiRun()
+                    // else: keep polling — slots still loading
+                }
+            }
+
             if (CroesusParser.inRunMenu(screen)) {
                 val cid = screen.menu.containerId
                 if (cid != cachedContainerId) {
@@ -388,8 +405,10 @@ object AutoCroesus : Module(
                 }
             }
             CroesusParser.inCroesusMenu(containerScreen) -> {
-                // Server skipped the close phase; go straight to next run.
-                tryClickNextRun(containerScreen)
+                // Server skipped the close phase; route through the same
+                // polling path so we wait for slots to populate.
+                claimState = ClaimState.AWAIT_CROESUS_LIST
+                claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
             }
             else -> {
                 modMessage("&cAutoCroesus: aborted after buy — unexpected container \"" +
@@ -413,16 +432,22 @@ object AutoCroesus : Module(
         }
     }
 
-    /** Multi-run, just clicked "Go Back" from a run sub-screen. We expect
-     *  the Croesus list; once it opens we pick the next unclaimed run. */
+    /** Multi-run, just clicked "Go Back" or re-interacted with the NPC. We
+     *  expect the Croesus list; once it opens, the TickEvent polling loop
+     *  picks the next unclaimed run as soon as the slot data finishes loading
+     *  (Hypixel sends ClientboundContainerSetSlotPacket asynchronously after
+     *  the open packet, so scanning immediately would find empty slots and
+     *  wrongly declare the cycle complete). */
     private fun handleCroesusListOpen(screen: net.minecraft.client.gui.screens.Screen) {
-        if (CroesusParser.inCroesusMenu(screen)) {
-            tryClickNextRun(screen as AbstractContainerScreen<*>)
-        } else {
+        if (!CroesusParser.inCroesusMenu(screen)) {
             val title = (screen as? AbstractContainerScreen<*>)?.title?.string ?: "?"
             modMessage("&cAutoCroesus: aborted — expected Croesus list, got \"$title\".")
             resetCycle()
+            return
         }
+        // Refresh the deadline — the actual click happens in TickEvent once
+        // slot 4 (the Croesus info icon) becomes non-empty (= slots loaded).
+        claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
     }
 
     /** Send the "Go Back" click from the current run sub-screen → Croesus list. */
@@ -487,8 +512,10 @@ object AutoCroesus : Module(
             .minByOrNull { it.position().distanceTo(playerPos) }
     }
 
-    /** Kick off a multi-run cycle from the Croesus list. Validates and then
-     *  delegates to [tryClickNextRun] for the actual first click. */
+    /** Kick off a multi-run cycle from the Croesus list. The actual scan +
+     *  click happens in the TickEvent polling loop — going through the
+     *  same code path as the post-back-out and post-NPC-reopen flows
+     *  guarantees we always wait for slot data to populate first. */
     private fun tryStartMultiRun(screen: AbstractContainerScreen<*>) {
         if (!multiRun) {
             modMessage("&cAutoCroesus: enable the &fMulti-run claim&c switch to use the " +
@@ -499,25 +526,13 @@ object AutoCroesus : Module(
         multiRunRunsThisCycle = 0
         chainClaimsThisCycle = 0
         modMessage("&aAutoCroesus: starting multi-run cycle…")
-        tryClickNextRun(screen)
+        claimState = ClaimState.AWAIT_CROESUS_LIST
+        claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
     }
 
-    /** Find the first unclaimed run in the current Croesus list and click it.
-     *  Returns false (and ends the cycle) when no unclaimed runs are visible. */
-    private fun tryClickNextRun(screen: AbstractContainerScreen<*>): Boolean {
-        val unclaimed = CroesusParser.findUnclaimedRunSlots(screen.menu)
-        if (unclaimed.isEmpty()) {
-            modMessage(
-                "&aMulti-run complete — bought &f$multiRunChestsThisCycle&a chest" +
-                    (if (multiRunChestsThisCycle == 1) "" else "s") + " across " +
-                    "&f$multiRunRunsThisCycle&a run" +
-                    (if (multiRunRunsThisCycle == 1) "" else "s") +
-                    "; no more unclaimed runs visible."
-            )
-            resetCycle()
-            return false
-        }
-        val slot = unclaimed.first()
+    /** Click an unclaimed run by slot index and transition to AWAIT_RUN_SCREEN.
+     *  Called from the TickEvent polling loop once slot data has populated. */
+    private fun clickUnclaimedRun(slot: Int): Boolean {
         if (!ContainerUtils.click(slot)) {
             modMessage("&cAutoCroesus: failed to click run slot $slot.")
             resetCycle()
@@ -527,6 +542,19 @@ object AutoCroesus : Module(
         claimState = ClaimState.AWAIT_RUN_SCREEN
         claimDeadlineTick = monotonicTick + (claimTimeoutTicks * 2).toLong()
         return true
+    }
+
+    /** End-of-cycle summary — fires when the Croesus list shows no unclaimed
+     *  runs (after slot data has loaded, so we know it's the real answer). */
+    private fun completeMultiRun() {
+        modMessage(
+            "&aMulti-run complete — bought &f$multiRunChestsThisCycle&a chest" +
+                (if (multiRunChestsThisCycle == 1) "" else "s") + " across " +
+                "&f$multiRunRunsThisCycle&a run" +
+                (if (multiRunRunsThisCycle == 1) "" else "s") +
+                "; no more unclaimed runs visible."
+        )
+        resetCycle()
     }
 
     /** Validates preconditions, picks the best chest, sends the first click,
