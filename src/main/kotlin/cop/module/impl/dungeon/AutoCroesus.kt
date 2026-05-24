@@ -126,6 +126,14 @@ object AutoCroesus : Module(
             "back out, repeat. Stops when no unclaimed runs remain visible. Pair with Chain claim " +
             "to also claim multiple chests per run (requires Dungeon Chest Keys in inventory)."
     )
+    private val multiRunPacing by slider(
+        "Multi-run pacing", 6, 3, 20, 1,
+        desc = "Ticks of padding between server actions in multi-run mode — applied both to the " +
+            "post-buy 'menu fully closed' detector and the post-NPC-reopen 'click sync' delay. " +
+            "Lower = snappier cycles, higher = safer for high ping. Drop to 3-4 on a local " +
+            "connection; bump to 10-15 if you see 'expected run sub-screen, got Croesus' aborts.",
+        unit = "t"
+    )
 
     // -- Phase 4 (kismet rerolls) --------------------------------------------
 
@@ -207,13 +215,12 @@ object AutoCroesus : Module(
     private var noScreenSinceTick = 0L
 
     /** First tick at which the Croesus list was observed populated (slot 4
-     *  + slot 49 non-empty). We wait an additional [CROESUS_SYNC_DELAY_TICKS]
+     *  + slot 49 non-empty). We wait an additional [multiRunPacing] ticks
      *  after that before clicking — Hypixel pushes slot data asynchronously
      *  and rejects clicks whose lastStateId is behind the server's, refreshing
      *  the menu back at us instead of opening the run. 0 means "not yet
      *  populated". */
     private var croesusReadyAtTick = 0L
-    private val CROESUS_SYNC_DELAY_TICKS = 10L
 
     /** True after we send a reroll click on the current buy-confirm — guards
      *  against double-rerolling the same chest. Reset each time we start a
@@ -302,8 +309,8 @@ object AutoCroesus : Module(
             if (claimState == ClaimState.AWAIT_AFTER_BUY && multiRun) {
                 if (mc.screen == null) {
                     if (noScreenSinceTick == 0L) noScreenSinceTick = monotonicTick
-                    else if (monotonicTick - noScreenSinceTick >= 10L) {
-                        // ~500ms with no screen = menu fully closed.
+                    else if (monotonicTick - noScreenSinceTick >= multiRunPacing.toLong()) {
+                        // No screen for [multiRunPacing] ticks = menu fully closed.
                         noScreenSinceTick = 0L
                         tryReopenCroesus()
                     }
@@ -348,8 +355,8 @@ object AutoCroesus : Module(
             }
 
             // Multi-run polling: in AWAIT_CROESUS_LIST, wait for the menu to
-            // fully populate, then wait CROESUS_SYNC_DELAY_TICKS extra ticks
-            // so Hypixel's lastStateId is current before we click — otherwise
+            // fully populate, then wait [multiRunPacing] extra ticks so
+            // Hypixel's lastStateId is current before we click — otherwise
             // the server rejects our click and refreshes the menu at us
             // instead of opening the run sub-screen.
             if (claimState == ClaimState.AWAIT_CROESUS_LIST &&
@@ -359,7 +366,7 @@ object AutoCroesus : Module(
                 val populated = slot4 && slot49
                 if (populated) {
                     if (croesusReadyAtTick == 0L) croesusReadyAtTick = monotonicTick
-                    if (monotonicTick - croesusReadyAtTick >= CROESUS_SYNC_DELAY_TICKS) {
+                    if (monotonicTick - croesusReadyAtTick >= multiRunPacing.toLong()) {
                         val unclaimed = CroesusParser.findUnclaimedRunSlots(screen.menu)
                         if (unclaimed.isNotEmpty()) {
                             clickUnclaimedRun(unclaimed.first())
