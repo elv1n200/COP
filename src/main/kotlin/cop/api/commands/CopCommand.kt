@@ -313,9 +313,14 @@ object CopCommand {
                     }
                     if (s.topItems.isNotEmpty()) {
                         add("&6Top items:")
+                        // Lore-formatted names sometimes already include " xN"
+                        // (essences, stacked books) — strip so we don't print
+                        // "Wither Essence x28 x28".
+                        val trailingQty = Regex("\\s+x\\d+\$")
                         for (it in s.topItems) {
+                            val baseName = it.name.replace(trailingQty, "")
                             val qtyLabel = if (it.totalQty > 1) " &7x&f${it.totalQty}" else ""
-                            add("  &f${it.name}$qtyLabel  &a${pc.formatPrice(it.totalValue)}")
+                            add("  &f$baseName$qtyLabel  &a${pc.formatPrice(it.totalValue)}")
                         }
                     }
                 }
