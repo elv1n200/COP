@@ -304,7 +304,7 @@ object ClickGui : Module(
         moduleScopes: MutableList<Pair<Module, ElementScope<*>>>,
         data: CategoryData,
     ) {
-        val expanded = data.subExtended[sub] ?: true
+        val expanded = data.isSubExpanded(sub)
         val height = Animatable(from = Bounding, to = 0.px, swapIf = !expanded)
 
         block(
@@ -322,7 +322,7 @@ object ClickGui : Module(
             onClick {
                 height.animate(0.2.seconds, style = Animation.Style.EaseInOutQuint)
                 redraw()
-                data.subExtended[sub] = !(data.subExtended[sub] ?: true)
+                data.toggleSubExpanded(sub)
                 true
             }
         }
@@ -477,11 +477,25 @@ object ClickGui : Module(
         var extended: Boolean,
         /** Per-sub-category collapse state. Key is the lowercased package
          *  segment used as the sub-category id (e.g. "cheats", "huds"); value
-         *  is true when the sub-section is expanded. Missing key = expanded. */
-        var subExtended: MutableMap<String, Boolean> = mutableMapOf(),
+         *  is true when the sub-section is expanded. Missing key OR null map
+         *  defaults to expanded.
+         *
+         *  Stored as nullable because Gson ignores Kotlin's default-value when
+         *  the field is missing from old JSON, leaving it null on first load
+         *  after this code shipped. [isSubExpanded] / [toggleSubExpanded] lazy-
+         *  init the map on first write so the rest of the GUI never has to
+         *  null-check it. */
+        var subExtended: MutableMap<String, Boolean>? = null,
     ) {
         val defaultX = x
         val defaultY = y
+
+        fun isSubExpanded(sub: String): Boolean = subExtended?.get(sub) ?: true
+
+        fun toggleSubExpanded(sub: String) {
+            val map = subExtended ?: mutableMapOf<String, Boolean>().also { subExtended = it }
+            map[sub] = !(map[sub] ?: true)
+        }
     }
 
     private enum class PingType(val value: () -> Double) {
