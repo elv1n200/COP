@@ -63,20 +63,51 @@ object CopCommand {
             }
 
             // Phase-1 sanity check for the Auto Croesus price client.
-            // Usage: /copdev pricetest <ITEM_ID or display name>
-            // Note: enchantment-book IDs (ENCHANTMENT_X_Y) and reforges aren't in
-            // the items registry — you must pass the full id, e.g. ENCHANTMENT_COMBO_6.
+            // Usage:
+            //   /copdev pricetest <ITEM_ID or display name>          (regular item)
+            //   /copdev pricetest book <ENCHANT_NAME> <level>         (enchant book)
+            // Examples:
+            //   /copdev pricetest HYPERION
+            //   /copdev pricetest book ULTIMATE_COMBO 5
+            //   /copdev pricetest book SHARPNESS 7
+            // Ultimate enchants (Combo, Wise, ...) need the ULTIMATE_ prefix —
+            // SkyCofl uses the same names the NBT does (lowercased), and our
+            // chest-scanner in later phases will read the NBT key directly.
             "pricetest" { query: GreedyString ->
-                val raw = query.string.trim()
-                if (raw.isEmpty()) {
-                    modMessage("&cUsage: /copdev pricetest <ITEM_ID or display name>")
+                val pc = cop.utils.skyblock.PriceClient
+                val parts = query.string.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                if (parts.isEmpty()) {
+                    modMessage("&cUsage: /copdev pricetest <id>  &7or  &c/copdev pricetest book <ENCHANT> <lvl>")
                     return@invoke
                 }
-                val pc = cop.utils.skyblock.PriceClient
                 val ageLabel = if (pc.isLoaded) "${pc.ageMs / 1000}s" else "never"
+
+                // --- enchant-book form ---
+                if (parts[0].equals("book", true)) {
+                    if (parts.size < 3) {
+                        modMessage("&cUsage: /copdev pricetest book <ENCHANT_NAME> <level>")
+                        return@invoke
+                    }
+                    val name = parts[1].uppercase()
+                    val level = parts[2].toIntOrNull() ?: run {
+                        modMessage("&cLevel must be an integer.")
+                        return@invoke
+                    }
+                    modMessage("&7Fetching enchant book ${name} ${level}...")
+                    pc.fetchEnchantBookPrice(name, level) { lb ->
+                        mc.execute {
+                            modMessage(
+                                "&bPrice for &fENCHANTED_BOOK[$name=$level]&7:" +
+                                    "\n  &7lowest BIN:  " + (lb?.let { "&a${pc.formatPrice(it)}" } ?: "&8n/a")
+                            )
+                        }
+                    }
+                    return@invoke
+                }
+
+                // --- regular item form ---
+                val raw = parts.joinToString(" ")
                 modMessage("&7Fetching prices (cache age=$ageLabel)...")
-                // Bulk refresh (bazaar + items registry), then a per-item SkyCofl
-                // LBIN lookup. No more Moulberry — see PriceClient docstring.
                 pc.refreshIfStale {
                     val id = pc.resolveItemId(raw) ?: raw.uppercase().replace(' ', '_')
                     pc.fetchLowestBin(id) { lb ->
