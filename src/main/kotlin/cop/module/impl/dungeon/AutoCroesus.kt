@@ -78,9 +78,20 @@ object AutoCroesus : Module(
 
             if (CroesusParser.inRunMenu(screen)) {
                 val cid = screen.menu.containerId
-                if (cid != cachedContainerId) { lastChests = emptyList(); cachedContainerId = cid; ticksSinceParse = Int.MAX_VALUE }
+                if (cid != cachedContainerId) {
+                    lastChests = emptyList()
+                    cachedContainerId = cid
+                    // Mark for immediate parse on the next tick. Setting to
+                    // Int.MAX_VALUE was a bug — the ++ below overflowed to
+                    // Int.MIN_VALUE and the threshold check then never fired.
+                    ticksSinceParse = refreshTicks
+                    loggedParse = false
+                }
                 ticksSinceParse++
-                if (ticksSinceParse >= refreshTicks) {
+                // Belt+suspenders: also parse whenever we have no data yet,
+                // so we never sit in a Croesus run sub-screen with an empty
+                // overlay just because of a counter race.
+                if (lastChests.isEmpty() || ticksSinceParse >= refreshTicks) {
                     lastChests = CroesusParser.parseChests(screen.menu)
                     ticksSinceParse = 0
                     if (!loggedParse) {
