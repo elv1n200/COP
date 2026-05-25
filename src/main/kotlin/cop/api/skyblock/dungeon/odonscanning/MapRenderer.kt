@@ -170,7 +170,11 @@ object MapRenderer {
             refresh()
         }
 
-        Dungeon.dungeonTeammates.forEach { player ->
+        // Snapshot before iterating — dungeonTeammates is a plain ArrayList
+        // shared with the network packet thread (party join/leave updates it
+        // mid-render), so direct iteration races into a ConcurrentModification
+        // exception under load (slower client, longer per-frame render).
+        Dungeon.dungeonTeammates.toList().forEach { player ->
             val self = player.name == mc.player?.name?.string
             val useHead = heads && (!self || ownHead)
 
@@ -440,7 +444,10 @@ object MapRenderer {
         }
 
         packet.decorations.getOrNull()?.let { decorations ->
-            val playerIterator = Dungeon.dungeonTeammates.iterator()
+            // Snapshot — same race as renderIcons. This runs on the network
+            // packet thread and could trip on a concurrent mutation from
+            // another network handler that hasn't returned yet.
+            val playerIterator = Dungeon.dungeonTeammates.toList().iterator()
 
             decorations.forEach { decoration ->
                 if (decoration.type.value() == MapDecorationTypes.FRAME.value()) return@forEach
