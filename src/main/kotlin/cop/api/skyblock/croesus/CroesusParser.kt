@@ -186,6 +186,17 @@ object CroesusParser {
         lorePlain: List<String>,
         loreFormatted: List<String>,
     ): ChestParseResult {
+        // Already-bought chests (from a prior session) keep their cosmetic
+        // lore minus the "Cost" / "Click to open!" lines and gain an "already
+        // bought / opened" note. Detect that explicitly so the overlay says
+        // something meaningful instead of "no Cost marker in lore".
+        if (lorePlain.any {
+                val s = it.lowercase()
+                "already bought" in s || "already opened" in s
+            }) {
+            return ChestParseResult.Failure(tierName, "already bought")
+        }
+
         // Verified by /copdev croesusdump — Hypixel's chest tooltip is rigid:
         //   lore[0]            = "Contents"
         //   lore[1..N]         = one line per item
@@ -221,7 +232,6 @@ object CroesusParser {
             if (plain.isEmpty()) continue
             val formatted = loreFormatted.getOrNull(i) ?: plain
             val (id, qty) = tryParseLine(plain, formatted)
-                ?: return ChestParseResult.Failure(tierName, "unparseable line: \"$plain\"")
             val price = priceFor(id)
             items += RewardItem(id, qty, price, formatted)
             totalValue += price * qty
@@ -277,24 +287,33 @@ object CroesusParser {
 
     // -- Single-line parsing (book / essence / item) ----------------------------
 
-    /** Returns (skyblockId, qty) or null if the line is something we don't
-     *  recognise (the overlay will show a "?" for that chest).
+    /** Returns (skyblockId, qty). Never null — unknown items get a synthetic
+     *  upper-snake-case id (e.g. "Power Dragon Shard" → "POWER_DRAGON_SHARD")
+     *  so the chest still parses; [priceFor] returns 0 if the bazaar/AH
+     *  doesn't know that id, slightly under-estimating the chest's profit
+     *  rather than declaring the whole chest unparseable.
      *
      *  Takes both [plain] (formatting stripped, used for most matches and the
      *  items-registry display-name lookup) and [formatted] (with § codes,
      *  needed only to distinguish ultimate from regular enchanted books). */
-    private fun tryParseLine(plain: String, formatted: String): Pair<String, Int>? {
+    private fun tryParseLine(plain: String, formatted: String): Pair<String, Int> {
         tryParseBook(formatted)?.let { return it }
         tryParseEssence(plain)?.let { return it }
 
-        // Last resort: ask the items registry for the id by display name.
-        // Many regular items have an "x N" suffix we have to peel off first.
+        // Ask the items registry for the id by display name. Many regular
+        // items have an "x N" suffix we have to peel off first.
         val qtyMatch = Regex("^(.+?) x(\\d+)$").matchEntire(plain)
         val (namePart, qty) = if (qtyMatch != null) {
             qtyMatch.groupValues[1] to qtyMatch.groupValues[2].toInt()
         } else plain to 1
 
-        val id = PriceClient.resolveItemId(namePart) ?: return null
+        // Resolve via the registry; if that fails, synthesise a canonical-
+        // looking id from the name itself. Many Hypixel items have IDs that
+        // are just the display name uppercased with spaces replaced by
+        // underscores (e.g. "Power Dragon Shard" → "POWER_DRAGON_SHARD"), so
+        // this often hits the bazaar/AH anyway.
+        val id = PriceClient.resolveItemId(namePart)
+            ?: namePart.uppercase().replace(' ', '_').replace("'", "")
         return id to qty
     }
 
