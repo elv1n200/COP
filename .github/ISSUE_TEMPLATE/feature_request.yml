@@ -1,0 +1,39 @@
+name: Feature request
+description: Ein Vorschlag für ein neues Feature oder eine Verbesserung.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: feature
+    attributes:
+      label: What feature?
+      description: Was soll der Mod können was er heute nicht kann?
+    validations:
+      required: true
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: |
+        Wann wäre das nützlich? Welches Problem würde es lösen?
+        Konkrete Beispiele helfen ("wenn ich X mache, müsste ich
+        aktuell Y manuell tun, ich hätte gerne dass...").
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Hast du andere Lösungen erwogen? Andere Mods die das können?
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Neues Module
+        - Erweiterung eines bestehenden Moduls
+        - Kleine QoL / Polish
+        - Andere / unklar

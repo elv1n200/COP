@@ -1,6 +1,12 @@
 # COP
 
+[![Build](https://github.com/elv1n200/COP/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/elv1n200/COP/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/elv1n200/COP?label=release)](https://github.com/elv1n200/COP/releases/latest)
+[![License](https://img.shields.io/github/license/elv1n200/COP)](LICENSE)
+![Minecraft](https://img.shields.io/badge/Minecraft-1.21.10%20%7C%201.21.11%20%7C%2026.1.2-blue)
+
 Hypixel Skyblock Endgame-Mod für Minecraft 1.21.10 und 1.21.11 (Fabric).
+Versionsverlauf in [CHANGELOG.md](CHANGELOG.md), Releases auf [GitHub](https://github.com/elv1n200/COP/releases).
 
 ## Features
 
