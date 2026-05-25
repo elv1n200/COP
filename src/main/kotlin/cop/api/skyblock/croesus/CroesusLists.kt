@@ -6,7 +6,7 @@ import cop.config.configList
  * Two persisted item-id lists that shape the Auto Croesus driver's decisions:
  *
  *  - [alwaysBuy]: skyblock IDs whose presence in a chest **forces a claim**
- *    even when the chest's profit is below [cop.module.impl.dungeon.solvers.AutoCroesus]'s
+ *    even when the chest's profit is below [cop.module.impl.dungeon.qol.AutoCroesus]'s
  *    Min profit threshold. Use for hand-picked drops you want regardless
  *    of cost (e.g. "WITHER_BLADE", "FIFTH_MASTER_STAR").
  *  - [worthless]: skyblock IDs the price model should value as **zero** when

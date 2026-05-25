@@ -1,4 +1,4 @@
-package cop.module.impl.dungeon.qol
+package cop.module.impl.dungeon.cheats
 
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.world.phys.BlockHitResult

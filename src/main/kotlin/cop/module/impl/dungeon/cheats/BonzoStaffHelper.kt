@@ -1,4 +1,4 @@
-package cop.module.impl.dungeon.solvers
+package cop.module.impl.dungeon.cheats
 
 import net.minecraft.sounds.SoundEvents
 import cop.api.colour.Colour

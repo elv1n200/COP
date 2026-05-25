@@ -1,4 +1,4 @@
-package cop.module.impl.dungeon.solvers
+package cop.module.impl.dungeon.qol
 
 import cop.CopMod
 import cop.api.colour.Colour

@@ -1,4 +1,4 @@
-package cop.module.impl.dungeon.qol
+package cop.module.impl.dungeon.cheats
 
 import kotlinx.coroutines.launch
 import cop.CopMod.scope
