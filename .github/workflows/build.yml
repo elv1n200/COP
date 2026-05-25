@@ -1,0 +1,64 @@
+name: Build
+
+# Runs on every push to either supported branch + every PR targeting
+# them. Builds the active branch's jar(s) and uploads them as artifacts
+# so PR reviewers can grab a one-off binary without checking out locally.
+#
+# JDK selection is branch-aware: main + 1.21.x branches use JDK 21,
+# the mc26 branch uses JDK 25 (Minecraft 26 needs a newer toolchain).
+on:
+  push:
+    branches: [main, mc26]
+  pull_request:
+    branches: [main, mc26]
+
+# Cancel in-progress runs for the same ref when a newer commit lands —
+# saves runner minutes when pushing multiple commits in quick succession.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ github.head_ref || github.ref_name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect target branch
+        id: branch
+        run: |
+          # For pushes, github.ref_name is the branch.
+          # For PRs, use base_ref (the target branch).
+          BRANCH="${{ github.base_ref || github.ref_name }}"
+          echo "name=$BRANCH" >> $GITHUB_OUTPUT
+          if [ "$BRANCH" = "mc26" ]; then
+            echo "java=25" >> $GITHUB_OUTPUT
+          else
+            echo "java=21" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up JDK ${{ steps.branch.outputs.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.branch.outputs.java }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: ./gradlew build --no-daemon --stacktrace
+
+      - name: Upload jars
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cop-jars-${{ steps.branch.outputs.name }}-${{ github.sha }}
+          path: |
+            versions/*/build/libs/cop-*.jar
+            !versions/*/build/libs/cop-*-sources.jar
+          if-no-files-found: error
+          retention-days: 14

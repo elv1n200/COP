@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in COP is broken / behaves wrong.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für den Report! Bitte fülle die Felder aus — vor allem die
+        Logs sind kritisch (`%APPDATA%\.minecraft\logs\latest.log` oder
+        der Pfad deines Mod-Launchers).
+
+  - type: input
+    id: cop-version
+    attributes:
+      label: COP version
+      description: Steht im ClickGUI-Titel und im Jar-Dateinamen.
+      placeholder: "1.3.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mc-version
+    attributes:
+      label: Minecraft version
+      options:
+        - "1.21.10"
+        - "1.21.11"
+        - "26.1.2"
+        - Other (note in description)
+    validations:
+      required: true
+
+  - type: input
+    id: java-version
+    attributes:
+      label: Java version
+      description: `java -version` aus dem Terminal.
+      placeholder: "21.0.4 Temurin"
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Was hast du erwartet, was ist stattdessen passiert?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: |
+        So konkret wie möglich. "Auf Hypixel → /warp dungeon_hub →
+        Croesus öffnen → Claim-Taste drücken → Crash" ist gut.
+        "Crasht random in Dungeons" ist schwer zu fixen.
+      placeholder: |
+        1.
+        2.
+        3.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Stack trace falls vorhanden, oder die letzten ~50 Zeilen
+        aus `latest.log` rund um den Bug. Wird automatisch als
+        Code-Block formatiert.
+      render: shell
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: Ich nutze die neueste COP-Version (oder ein Pre-Release).
+          required: true
+        - label: Ich habe in den existierenden Issues gesucht und nichts ähnliches gefunden.
+          required: true
