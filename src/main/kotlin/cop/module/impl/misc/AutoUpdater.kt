@@ -2,7 +2,7 @@ package cop.module.impl.misc
 
 import com.google.gson.JsonPrimitive
 import cop.CopMod
-import cop.api.events.GameEvent
+import cop.api.events.ServerEvent
 import cop.api.input.CatKeys
 import cop.module.Module
 import cop.utils.ChatUtils
@@ -49,7 +49,9 @@ object AutoUpdater : Module(
     // ---------------------------------------------------------------- settings
     private val checkOnLaunch by switch(
         "Check on launch", true,
-        desc = "Hits the GitHub API once when the module enables.",
+        desc = "Hits the GitHub API once per Minecraft session, the first time you join a " +
+            "Hypixel server. Other servers (singleplayer, lobby tests, etc.) never trigger " +
+            "a check — the mod is Hypixel-only so there's no point updating elsewhere.",
     )
     private val showPopup by switch(
         "Show popup screen", true,
@@ -93,6 +95,11 @@ object AutoUpdater : Module(
     private val checkInFlight = AtomicBoolean(false)
     /** "Remind me later" — transient suppression for the rest of this session. */
     @Volatile private var remindLaterFor: String? = null
+    /** True once we've kicked off (or queued) an automatic check in this MC
+     *  session — prevents the "(x4)" spam from re-checking on every lobby hop
+     *  or dungeon entry. Reset only by restarting the game. Manual checks via
+     *  the keybind are unaffected. */
+    @Volatile private var autoCheckFiredThisSession = false
 
     /** Bare mod version reported in `fabric.mod.json` — e.g. `1.0.0`. */
     private val currentModVersion: String by lazy {
@@ -129,14 +136,25 @@ object AutoUpdater : Module(
         // Sweep stale `.autoupdates/cop/*` directories from any previous,
         // never-applied update so the disk doesn't slowly fill up.
         runCatching { context.cleanup() }
-        if (checkOnLaunch) runCheck(reason = "on-enable")
+        // No check here — we wait for a Hypixel server-connect (or, if the
+        // user enabled mid-session while already on Hypixel, the next reload).
     }
 
     init {
-        // Re-check after a world join — covers the case where the user enabled
-        // the module mid-session (so onEnable already fired before currentMod
-        // was loaded) and wants the check to fire later.
-        on<GameEvent.Load> { runCheck(reason = "game-load") }
+        // Fire the launch check exactly once per Minecraft session, the first
+        // time we connect to a Hypixel server. Previous design used
+        // GameEvent.Load which fires on every world swap (lobby hop, dungeon
+        // entry, garden tp, …) producing four-plus "already on the latest
+        // version" messages per play session. ServerEvent.Connect fires only
+        // on actual server connections; the IP check skips singleplayer +
+        // non-Hypixel test servers where an update would be pointless.
+        on<ServerEvent.Connect> {
+            if (autoCheckFiredThisSession) return@on
+            if (!checkOnLaunch) return@on
+            if (!ip.contains("hypixel", ignoreCase = true)) return@on
+            autoCheckFiredThisSession = true
+            runCheck(reason = "hypixel-join")
+        }
     }
 
     private fun runCheck(reason: String) {
