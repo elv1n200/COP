@@ -37,3 +37,6 @@ dist/
 # --- Local secrets / per-machine config -----------------------------
 local.properties
 .tmp_src/
+
+# Claude Code worktrees + session metadata — local-only
+.claude/
