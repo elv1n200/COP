@@ -1,4 +1,4 @@
-package cop.module.impl.dungeon.qol
+package cop.module.impl.dungeon.cheats
 import cop.module.impl.dungeon.cheats.SecretAura
 
 import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket
