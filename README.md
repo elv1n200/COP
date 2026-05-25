@@ -1,9 +1,12 @@
 # COP
 
-Hypixel Skyblock Endgame-Mod für Minecraft 26.1.2 (Fabric).
+[![Build](https://github.com/elv1n200/COP/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/elv1n200/COP/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/elv1n200/COP?label=release)](https://github.com/elv1n200/COP/releases/latest)
+[![License](https://img.shields.io/github/license/elv1n200/COP)](LICENSE)
+![Minecraft](https://img.shields.io/badge/Minecraft-26.1.2-blue)
 
-> Dieser Branch (`mc26`) baut für Minecraft 26.1.2 (unobfuskiert, JDK 25). Die
-> 1.21.10/1.21.11-Builds liegen auf `main`.
+Hypixel Skyblock Endgame-Mod für Minecraft 26.1.2 (Fabric).
+Versionsverlauf in [CHANGELOG.md](CHANGELOG.md), Releases auf [GitHub](https://github.com/elv1n200/COP/releases).
 
 ## Features
 
@@ -19,17 +22,17 @@ Hypixel Skyblock Endgame-Mod für Minecraft 26.1.2 (Fabric).
 
 ## Build
 
-Gebaut wird über Stonecutter aus einem gemeinsamen Source-Tree (versionsspezifische
-Codepfade als `//?`-Direktiven). Dieser Branch ist auf Minecraft 26.1.2 konfiguriert
-und braucht JDK 25.
+Beide unterstützten Minecraft-Versionen werden über Stonecutter aus einem gemeinsamen Source-Tree gebaut.
 
 ```bash
-./gradlew build       # baut 26.1.2
-./gradlew buildAll    # baut alle konfigurierten Versionen, Output liegt in dist/
+./gradlew build                       # baut die aktuell aktive Version (Default 1.21.10)
+./gradlew build -Pmc_target=1.21.11   # einzelne Zielversion
+./gradlew buildAll                    # baut beide, Output liegt in dist/
 ```
 
 Output:
-- `dist/cop-<version>+mc26.1.2.jar`
+- `dist/cop-<version>+mc1.21.10.jar`
+- `dist/cop-<version>+mc1.21.11.jar`
 
 Für einen Dev-Run mit DevAuth:
 
