@@ -69,15 +69,30 @@ class UpdateScreen(
         )
     }
 
-    // 26.x: Screen.render(...) -> extractRenderState(...) (deferred GUI model).
+    // 26.x moved GUI drawing to a deferred extract model: Screen.render(...) ->
+    // extractRenderState(...). The two overrides below carry the same body —
+    // [drawPanel] — only the wrapping super.render(...) call differs.
+    //
+    // Order matters in either branch: backdrop + panel chrome FIRST, then
+    // super.render(...) (which draws widgets / buttons) on top — otherwise
+    // the panel paints over the buttons and they're invisible to the user
+    // even though they remain click-targetable.
     //? if >= 26 {
     /*override fun extractRenderState(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
+        drawPanel(g)
         super.extractRenderState(g, mouseX, mouseY, partialTick)
-    *///? } else {
+    }*/
+    //? } else {
     override fun render(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
+        drawPanel(g)
         super.render(g, mouseX, mouseY, partialTick)
+    }
     //? }
 
+    /** Backdrop + header + body + version labels + divider. Buttons are
+     *  rendered by the Screen widgets pipeline (super.render); we just lay
+     *  the chrome down first. */
+    private fun drawPanel(g: GuiGraphics) {
         val px = (width - panelWidth) / 2
         val py = (height - panelHeight) / 2
 

@@ -126,7 +126,13 @@ object AutoUpdater : Module(
         UpdateContext(
             McAwareGithubReleaseSource(owner, repo, currentMcVersion),
             UpdateTarget.deleteAndSaveInTheSameFolder(CopMod::class.java),
-            CurrentVersion.ofTag(currentModVersion),
+            // Strip leading 'v' so the local tag compares apples-to-apples
+            // with GitHub's tag-name (some releases are tagged '1.2.0',
+            // some 'v1.3.0' — the comparison is otherwise a plain string
+            // equality and would always think 'update available' on the
+            // versions tagged with a prefix). The matching strip on the
+            // remote side lives in McAwareGithubReleaseSource.findAsset.
+            CurrentVersion.ofTag(currentModVersion.removePrefix("v")),
             "cop",
         )
     }
@@ -268,7 +274,10 @@ object AutoUpdater : Module(
 
             return GithubReleaseUpdateData(
                 release.name ?: release.tagName,
-                JsonPrimitive(release.tagName),
+                // Strip the optional leading 'v' so e.g. tag 'v1.3.0'
+                // compares equal to the local mod_version '1.3.0'. Mirror
+                // of the strip in AutoUpdater.context.
+                JsonPrimitive(release.tagName.removePrefix("v")),
                 null,
                 match.browserDownloadUrl,
                 release.body,
