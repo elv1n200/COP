@@ -33,10 +33,25 @@ desktop.ini
 # --- Output / artifacts --------------------------------------------
 dist/
 *.log
+hs_err_pid*
 
 # --- Local secrets / per-machine config -----------------------------
 local.properties
 .tmp_src/
+
+# --- Editor / merge backups ----------------------------------------
+*.bak
+*.orig
+*.rej
+*.tmp
+*.swp
+*.swo
+# Locally-renamed asset backups (e.g. icon.old.png) — explicit pattern
+# so 'git add -A' doesn't accidentally commit them.
+*.old.*
+
+# --- Kotlin daemon cache -------------------------------------------
+.kotlin/
 
 # Claude Code worktrees + session metadata — local-only
 .claude/
