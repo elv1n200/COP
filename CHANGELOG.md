@@ -5,6 +5,13 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-05-26
+
+### Fixed
+- **AutoUpdater**: zwei Bugs nach dem 1.3.0-Release.
+  - "Update available" Popup feuerte auch wenn lokale Version = neueste Version, weil das GitHub-Tag `v1.3.0` mit `v`-Prefix war, der lokale `mod_version` aber `1.3.0` ohne. Defensive `v`-Stripping auf beiden Seiten der Vergleichs.
+  - Popup-Buttons waren unsichtbar (anklickbar aber unsichtbar) — `super.render()` wurde vor dem Panel-Hintergrund aufgerufen, der dann die Buttons übermalt hat. Reihenfolge umgedreht.
+
 ## [1.3.0] — 2026-05-25
 
 ### Added
@@ -56,6 +63,7 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - Initial public release.
 
+[1.3.1]: https://github.com/elv1n200/COP/releases/tag/1.3.1
 [1.3.0]: https://github.com/elv1n200/COP/releases/tag/v1.3.0
 [1.2.0]: https://github.com/elv1n200/COP/releases/tag/1.2.0
 [1.1.0]: https://github.com/elv1n200/COP/releases/tag/1.1.0

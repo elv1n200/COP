@@ -70,10 +70,13 @@ class UpdateScreen(
     }
 
     override fun render(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.render(g, mouseX, mouseY, partialTick)
-
         val px = (width - panelWidth) / 2
         val py = (height - panelHeight) / 2
+
+        // Order matters: backdrop + panel chrome FIRST, then super.render()
+        // (which draws widgets / buttons) on top — otherwise the panel paints
+        // over the buttons and they're invisible to the user even though
+        // they remain click-targetable.
 
         // Dim backdrop so the modal pops against the in-game render.
         g.fill(0, 0, width, height, ARGB.color(0xA0, 0, 0, 0))
@@ -108,6 +111,9 @@ class UpdateScreen(
 
         // Divider above the button row
         g.fill(px + 16, rowY + lineH + 30, px + panelWidth - 16, rowY + lineH + 31, COLOUR_OUTLINE)
+
+        // Buttons on top of everything.
+        super.render(g, mouseX, mouseY, partialTick)
     }
 
     private fun outline(g: GuiGraphics, x: Int, y: Int, w: Int, h: Int, col: Int) {
