@@ -69,14 +69,32 @@ class UpdateScreen(
         )
     }
 
+    // 26.x moved GUI drawing to a deferred extract model: Screen.render(...) ->
+    // extractRenderState(...). The two overrides below carry the same body —
+    // [drawPanel] — only the wrapping super.render(...) call differs.
+    //
+    // Order matters in either branch: backdrop + panel chrome FIRST, then
+    // super.render(...) (which draws widgets / buttons) on top — otherwise
+    // the panel paints over the buttons and they're invisible to the user
+    // even though they remain click-targetable.
+    //? if >= 26 {
+    /*override fun extractRenderState(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
+        drawPanel(g)
+        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    }*/
+    //? } else {
     override fun render(g: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
+        drawPanel(g)
+        super.render(g, mouseX, mouseY, partialTick)
+    }
+    //? }
+
+    /** Backdrop + header + body + version labels + divider. Buttons are
+     *  rendered by the Screen widgets pipeline (super.render); we just lay
+     *  the chrome down first. */
+    private fun drawPanel(g: GuiGraphics) {
         val px = (width - panelWidth) / 2
         val py = (height - panelHeight) / 2
-
-        // Order matters: backdrop + panel chrome FIRST, then super.render()
-        // (which draws widgets / buttons) on top — otherwise the panel paints
-        // over the buttons and they're invisible to the user even though
-        // they remain click-targetable.
 
         // Dim backdrop so the modal pops against the in-game render.
         g.fill(0, 0, width, height, ARGB.color(0xA0, 0, 0, 0))
@@ -111,9 +129,6 @@ class UpdateScreen(
 
         // Divider above the button row
         g.fill(px + 16, rowY + lineH + 30, px + panelWidth - 16, rowY + lineH + 31, COLOUR_OUTLINE)
-
-        // Buttons on top of everything.
-        super.render(g, mouseX, mouseY, partialTick)
     }
 
     private fun outline(g: GuiGraphics, x: Int, y: Int, w: Int, h: Int, col: Int) {
