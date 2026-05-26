@@ -33,12 +33,6 @@ object CatMode : Module(
     private val catSize by slider("Size", 15, 10, 50, 1, desc = "Size of the falling cats.", unit = "px").childOf(::fallingCats)
     private val catSpeed by slider("Speed", 1.0f, 0.5f, 3.0f, 0.1f, desc = "Speed of the falling cats.").childOf(::fallingCats)
 
-//    private val customModel by switch("Kitty kitty") // todo finish
-//    private val catModel by selector("Model", CatModel.Tabby).childOf(::customModel)
-//    private val self by switch("I'm a cat").childOf(::customModel)
-//    private val others by switch("He's a cat").childOf(::customModel)
-
-
     private val renderer = FallingCatsRenderer()
 
     init {

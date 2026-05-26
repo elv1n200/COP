@@ -94,6 +94,10 @@ object ModuleManager {
             AutoClicker,
             AutoAnvilBookCombine,
             Inventory,
+            // CustomTriggers — WIP, not yet shipped. Keep registered in
+            // source (cop.module.impl.misc.CustomTriggers + the matching
+            // cop.api.customtriggers package) so we can flip it on without
+            // a resurrection-from-history when the feature is finished.
 //            CustomTriggers,
             MirrorverseSolvers,
             CatMode,
@@ -134,9 +138,6 @@ object ModuleManager {
                 module.register(KeybindComponent("Key bind", it, desc = "Toggles the module"))
             }
         }
-
-//        EventBus.on<AreaEvent.Main> { modules.forEach { it.onToggle(it.enabled) } }
-//        EventBus.on<AreaEvent.Sub> { modules.forEach { it.onToggle(it.enabled) } }
 
         EventBus.on<KeyEvent.Press> { invokeKeybind(key, true) }
         EventBus.on<KeyEvent.Release> { invokeKeybind(key, false) }

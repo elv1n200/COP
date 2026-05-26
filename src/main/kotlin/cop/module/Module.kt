@@ -104,8 +104,6 @@ abstract class Module(
         return setting
     }
 
-//    operator fun <K : Setting<*>> K.unaryPlus(): K = register(this)
-
     fun getSettingByName(name: String?): Setting<*>? {
         for (setting in settings) {
             if (setting.jsonName.equals(name, true) /*|| setting.name.equals(name, true)*/) {
