@@ -60,9 +60,9 @@ Ablage: docs/images/autocroesus-overlay.png — dann hier einbinden:
 
 - **Worldrender** — DungeonMap, DungeonESP, HiddenMobs, NecronPlatformHighlight, FullBlockHitboxes, FuckDiorite, PersistentSecretHeads
 - **Huds** — Splits, Secrets, TickTimers, InvincibilityTimer, CooldownDisplay, M3FFDisplay, F7BossTitles, M7Relics, DoorKeys, MaxorsCrystals, ShadowAssassinAlert
-- **Solvers** — PuzzleSolvers (Blaze / Boulder / Beams / Ice Fill / Ice Path / Quiz / TicTacToe / Water / Weirdos / Maze), SimonSays, ArrowAlign, SecretRoutes (~150 vorgefertigte Routen), TerminalWaypoints
+- **Solvers** — PuzzleSolvers (Blaze / Boulder / Beams / Ice Fill / Ice Path / Quiz / TicTacToe / Water / Weirdos / Maze), SimonSays, ArrowAlign, TerminalWaypoints
 - **Qol** — LeapMenu, AutoPotionBag, CancelInteract, Ragnarock, AutoCroesus
-- **Cheats** — TerminalAura, AutoTerms, SecretTriggerBot, SecretAura, DungeonBreaker, AutoBloodRush, AutoClear, AutoRCM, AutoLCM, M3AutoFF, AutoMask, AutoLeap, AutoCloseChest, AutoSuperboom, BonzoStaffHelper
+- **Cheats** — TerminalAura, AutoTerms, SecretTriggerBot, SecretAura, DungeonBreaker, AutoBloodRush, AutoClear, AutoRCM, AutoLCM, M3AutoFF, AutoMask, AutoLeap, AutoCloseChest, AutoSuperboom
 
 <!--
 Screenshot-Slot. Empfehlung: ClickGUI Dungeon-Spalte mit aufgeklappten Sub-Headers.
