@@ -44,13 +44,15 @@ Konzepte und Ports aus **Nebulune** (Package `xyz.aerii.nebulune`): Etherwarp He
 
 © [Noamm9](https://github.com/noamm9).
 
-Konzepte und Ports für: F7 Boss Titles, Door Keys, Hidden Mobs, Ragnarock, Maxor Crystals, M7 Relics, Persistent Secret Heads, Inventory Search, PersonalBest Helper.
+Konzepte und Ports für: F7 Boss Titles, Door Keys, Hidden Mobs, Ragnarock, Maxor Crystals, M7 Relics, Inventory Search, PersonalBest Helper.
 
-## CritsAddons — GPL-3.0
+## CritsAddons — siehe [Repository](https://github.com/FateShop/CritsAddons)
 
-© [Noamm9](https://github.com/noamm9).
+© [FateShop](https://github.com/FateShop).
 
-Konzepte und Ports für: Secret Routes (inkl. der `assets/cop/secretRoutes.json` Route-DB mit ~150 Räumen), Auto RCM, Auto LCM, M3 Auto FF, M3 FF Display, Cooldown Display.
+Konzepte und Ports für: Secret Routes (inkl. der `assets/cop/secretRoutes.json` Route-DB mit ~150 Räumen), Auto RCM, Auto LCM, M3 Auto FF, M3 FF Display, Cooldown Display, Persistent Secret Heads.
+
+(Hinweis: die `Port of …`-Header in den Source-Dateien referenzieren teils noch das alte `com.github.noamm9.critsaddons.*`-Package — das ist nur der Build-Pfad, nicht die Authorenangabe.)
 
 ## Hunchclient — siehe Repository
 
