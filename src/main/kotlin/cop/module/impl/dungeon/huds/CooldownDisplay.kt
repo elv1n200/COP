@@ -1,6 +1,7 @@
 package cop.module.impl.dungeon.huds
 
 import cop.api.events.MouseEvent
+import cop.api.events.RenderEvent
 import cop.api.events.WorldEvent
 import cop.api.skyblock.Island
 import cop.api.skyblock.dungeon.Dungeon.currentDungeonPlayer
@@ -43,7 +44,7 @@ import kotlin.math.roundToInt
 object CooldownDisplay : Module(
     "Cooldown Display",
     area = Island.Dungeon,
-    desc = "Greys out hotbar items after you click them, using the 'Cooldown: Xs' line in their tooltip.",
+    desc = "Visualises ability cooldowns from a 'Cooldown: Xs' tooltip line — greys out the hotbar slot and/or overlays the remaining seconds as a number.",
 ) {
 
     // ---- Settings ---------------------------------------------------------
@@ -51,6 +52,14 @@ object CooldownDisplay : Module(
     private val dungeonsOnly by switch(
         "Only in dungeons", true,
         desc = "When on, the overlay only fires inside a Catacombs run. Off = anywhere in Skyblock.",
+    )
+    private val showGreySweep by switch(
+        "Grey sweep overlay", true,
+        desc = "Vanilla-style grey sweep animation on the hotbar slot. Same look as eating food or throwing an ender pearl.",
+    )
+    private val showNumberCountdown by switch(
+        "Numeric countdown", true,
+        desc = "Draw the remaining seconds as a small number on the hotbar slot. Sub-10s shows one decimal, above 10s shows whole seconds.",
     )
     private val coverRightClick by switch(
         "Right click", true,
@@ -82,6 +91,11 @@ object CooldownDisplay : Module(
     private val parseCache = HashMap<String, ItemCooldownInfo>()
     /** Last accepted trigger, in wall-clock millis. Used to apply [debounceMillis]. */
     private var lastFireWallMs = 0L
+    /** Active cooldowns, keyed by item identity → wall-clock millis at which
+     *  the cooldown expires. Maintained in parallel with the vanilla cooldown
+     *  table so the numeric overlay can compute remaining time without parsing
+     *  the vanilla `ItemCooldowns` internals. Lazy-evicted on read. */
+    private val activeEndTimes = HashMap<String, Long>()
 
     /** What we managed to extract from one item's tooltip. */
     private data class ItemCooldownInfo(
@@ -190,6 +204,12 @@ object CooldownDisplay : Module(
         val player = mc.player ?: return false
         val cooldownTable = player.cooldowns
         if (cooldownTable.isOnCooldown(stack)) return false
+        val key = identityKey(stack)
+        // Also bail out if our own numeric-countdown table already has the
+        // item active. Vanilla cooldowns can be cleared by interactions we
+        // don't track, so we need both checks.
+        val now = System.currentTimeMillis()
+        activeEndTimes[key]?.let { end -> if (end > now) return false }
 
         val rawSeconds = lookupSeconds(stack, side) ?: return false
         if (rawSeconds <= 0.0) return false
@@ -197,7 +217,12 @@ object CooldownDisplay : Module(
         val scaledSeconds = rawSeconds * mageReductionFactor()
         val ticks = max(1, (scaledSeconds * 20.0).roundToInt())
 
-        cooldownTable.addCooldown(stack, ticks)
+        // Vanilla grey-sweep overlay — only registered if the user wants it,
+        // so disabling the sweep cleanly hides it. The numeric countdown
+        // (drawn from activeEndTimes in the RenderEvent.Overlay handler) is
+        // unaffected.
+        if (showGreySweep) cooldownTable.addCooldown(stack, ticks)
+        activeEndTimes[key] = now + (ticks * 50L)
         // fromUserInput is unused at the moment, but kept as a hook in case
         // we ever want to emit a different chat message / sfx for user vs.
         // synthetic triggers.
@@ -262,6 +287,25 @@ object CooldownDisplay : Module(
 
     // ---- Event wiring -----------------------------------------------------
 
+    // ---- Numeric countdown render ----------------------------------------
+
+    /** Vanilla hotbar geometry (matches the values inside Gui.renderHotbar):
+     *  centered horizontally, 22px tall image at the bottom, 9 slots × 20px
+     *  starting 91px left of centre + 3px slot inset. */
+    private const val HOTBAR_HALF_WIDTH = 91
+    private const val HOTBAR_SLOT_WIDTH = 20
+    private const val HOTBAR_SLOT_INSET = 3
+    private const val HOTBAR_BOTTOM_OFFSET = 22
+
+    private fun formatCountdown(remainingMs: Long): String {
+        val seconds = remainingMs / 1000.0
+        return when {
+            seconds >= 10.0 -> seconds.toInt().toString()
+            seconds >= 1.0  -> "%.1f".format(seconds)
+            else            -> "%.1f".format(seconds.coerceAtLeast(0.1))
+        }
+    }
+
     init {
         on<MouseEvent.Click> {
             if (!state) return@on
@@ -278,7 +322,50 @@ object CooldownDisplay : Module(
 
         on<WorldEvent.Change> {
             parseCache.clear()
+            activeEndTimes.clear()
             lastFireWallMs = 0L
+        }
+
+        // Numeric countdown — per-frame HUD overlay. We avoid drawing while
+        // a screen is open (inventory, chest GUI, etc.) since the player can't
+        // act on the cooldown info there anyway and the number would land in
+        // a weird spot relative to the screen-overlay hotbar.
+        on<RenderEvent.Overlay> {
+            if (!showNumberCountdown) return@on
+            val player = mc.player ?: return@on
+            if (mc.screen != null) return@on
+            if (dungeonsOnly && !inDungeons) return@on
+            if (activeEndTimes.isEmpty()) return@on
+
+            val window = mc.window
+            val w = window.guiScaledWidth
+            val h = window.guiScaledHeight
+            val hotbarLeft = (w / 2) - HOTBAR_HALF_WIDTH + HOTBAR_SLOT_INSET
+            val slotY = h - HOTBAR_BOTTOM_OFFSET + HOTBAR_SLOT_INSET
+
+            val font = mc.font
+            val now = System.currentTimeMillis()
+
+            for (slotIndex in 0 until 9) {
+                val stack = player.inventory.getItem(slotIndex)
+                if (stack.isEmpty) continue
+                val key = identityKey(stack)
+                val end = activeEndTimes[key] ?: continue
+                val remaining = end - now
+                if (remaining <= 0) {
+                    activeEndTimes.remove(key)
+                    continue
+                }
+                val label = formatCountdown(remaining)
+                val labelWidth = font.width(label)
+                val slotX = hotbarLeft + slotIndex * HOTBAR_SLOT_WIDTH
+                // Centered horizontally over the 16px-wide slot icon. Vertically
+                // a couple px below the centre so it doesn't sit on top of the
+                // vanilla item-count text (lower-right).
+                val drawX = slotX + (16 - labelWidth) / 2
+                val drawY = slotY + 4
+                ctx.drawString(font, label, drawX, drawY, 0xFFFFFFFF.toInt(), true)
+            }
         }
     }
 }
