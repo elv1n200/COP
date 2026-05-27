@@ -54,9 +54,7 @@ object ModuleManager {
             PuzzleSolvers,
             SimonSays,
             ArrowAlign,
-            SecretRoutes,
             AutoCroesus,
-            BonzoStaffHelper,
             TerminalWaypoints,
 
             // --- QoL / mild automation --------------------------------

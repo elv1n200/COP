@@ -50,13 +50,13 @@ Konzepte und Ports für: F7 Boss Titles, Door Keys, Hidden Mobs, Ragnarock, Maxo
 
 © [FateShop](https://github.com/FateShop).
 
-Konzepte und Ports für: Secret Routes (inkl. der `assets/cop/secretRoutes.json` Route-DB mit ~150 Räumen), Auto RCM, Auto LCM, M3 Auto FF, M3 FF Display, Cooldown Display, Persistent Secret Heads.
+Konzepte und Ports für: Auto RCM, Auto LCM, M3 Auto FF, M3 FF Display, Cooldown Display, Persistent Secret Heads.
 
 (Hinweis: die `Port of …`-Header in den Source-Dateien referenzieren teils noch das alte `com.github.noamm9.critsaddons.*`-Package — das ist nur der Build-Pfad, nicht die Authorenangabe.)
 
 ## Hunchclient — siehe Repository
 
-Konzepte und Ports für: Bonzo Staff Helper, Custom Mage Beam.
+Konzepte und Ports für: Custom Mage Beam.
 
 ## libautoupdate — MIT
 
