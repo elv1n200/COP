@@ -108,10 +108,17 @@ object Dungeon {
 //    inline val currentRoomName: String
 //        get() = DungeonListener.currentRoom?.data?.name ?: "Unknown"
 
-    var dungeonTeammates: ArrayList<DungeonPlayer> = ArrayList(5)
+    /** Live list of teammates in the current dungeon. Read from the render
+     *  thread (MapRenderer.renderIcons, several HUD modules) and mutated
+     *  from the network thread (tab-list parsing on packet receive). A
+     *  plain ArrayList here was a CME landmine — render iterates while
+     *  packet handler adds/removes/replaces. CopyOnWriteArrayList makes
+     *  reads + iterations lock-free; the per-write copy cost is negligible
+     *  for a five-element party-sized list. */
+    var dungeonTeammates: MutableList<DungeonPlayer> = java.util.concurrent.CopyOnWriteArrayList()
         private set
 
-    var dungeonTeammatesNoSelf: List<DungeonPlayer> = ArrayList(4)
+    var dungeonTeammatesNoSelf: List<DungeonPlayer> = emptyList()
         private set
 
     val allTeammates: List<String>
@@ -403,7 +410,7 @@ object Dungeon {
 
     private val tablistRegex = Regex("^\\[(\\d+)] (?:\\[\\w+] )*(\\w+) .*?\\((\\w+)(?: (\\w+))*\\)$")
 
-    private fun getDungeonTeammates(previousTeammates: ArrayList<DungeonPlayer>, tabList: List<Pair<String, Colour>>): ArrayList<DungeonPlayer> {
+    private fun getDungeonTeammates(previousTeammates: MutableList<DungeonPlayer>, tabList: List<Pair<String, Colour>>): MutableList<DungeonPlayer> {
         for ((line, colour) in tabList) {
             val (_, name, clazz, clazzLevel) = tablistRegex.find(line)?.destructured ?: continue
 
