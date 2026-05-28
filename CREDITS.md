@@ -54,10 +54,6 @@ Konzepte und Ports für: Auto RCM, Auto LCM, M3 Auto FF, M3 FF Display, Cooldown
 
 (Hinweis: die `Port of …`-Header in den Source-Dateien referenzieren teils noch das alte `com.github.noamm9.critsaddons.*`-Package — das ist nur der Build-Pfad, nicht die Authorenangabe.)
 
-## Hunchclient — siehe Repository
-
-Konzepte und Ports für: Custom Mage Beam.
-
 ## libautoupdate — MIT
 
 © [nea (moe.nea)](https://github.com/nea89o). Wird für das `Auto Updater`-Modul verwendet. Die Bibliothek wird über `include(...)` in die Mod-Jar gebündelt.
