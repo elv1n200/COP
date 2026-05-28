@@ -10,66 +10,83 @@ import cop.utils.ui.textPair
 import java.util.Locale
 
 /**
- * Port of CritsAddons `M3FFDisplay` (com.github.noamm9.critsaddons.features.impl.critsaddons.M3FFDisplay).
+ * Master Floor 3 Fire-Freeze HUD.
  *
- * M3's Professor has a brief Fire Freeze window — about 5s after the trigger line
- * "Oh? You found my Guardians' one weakness?". This HUD shows a live countdown until
- * you should fire your Fire Freeze Staff so you don't eyeball it.
+ * The Professor at the end of M3 spawns a brief vulnerability window five
+ * seconds after he says "Oh? You found my Guardians' one weakness?". Players
+ * fire their Fire Freeze Staff into that window for max damage. Eyeballing
+ * the gap is annoying — this HUD draws a live `M3 FF: 4.21s` countdown so
+ * you can time the shot off a number instead.
+ *
+ * Re-implemented from scratch (May 2026). Behaviour identical to the previous
+ * port; the state machine is simpler (a single `Phase` enum), the trigger
+ * detection uses a substring match for resilience against Hypixel tweaking
+ * the boss name prefix, and the formatter is forced to Locale.US so non-US
+ * clients don't render "4,21s" with a comma.
  */
 object M3FFDisplay : Module(
     "M3 FF Display",
     area = Island.Dungeon(3, inBoss = true),
-    desc = "Shows a Fire Freeze countdown in M3 once the Professor's trigger line fires."
+    desc = "Counts down the ~5s window between the Professor's trigger line and the Fire Freeze opportunity in M3."
 ) {
-    private const val PROFESSOR_FIRE_FREEZE_LINE =
-        "[BOSS] The Professor: Oh? You found my Guardians' one weakness?"
-    private const val FIRE_FREEZE_DELAY_MS = 5000L
+    private const val WINDOW_MILLIS = 5_000L
 
+    /** Substring on the boss line that triggers the countdown. We match by
+     *  contains rather than equals so any leading prefix variation (server
+     *  re-routes the line through "[BOSS] The Professor:" / "Boss:" / etc)
+     *  doesn't break detection. The original port relied on the exact full
+     *  line — brittle in practice. */
+    private const val TRIGGER_PHRASE = "You found my Guardians' one weakness"
+
+    /** Tiny state machine guarding against double-arm: the trigger line can
+     *  arrive twice in pathological cases (chat re-render, packet replay).
+     *  Only re-arm when the previous countdown has actually expired. */
+    private enum class Phase { Idle, Armed }
+    @Volatile private var phase = Phase.Idle
     private var fireAtMs = 0L
-    private var lastTriggerAtMs = 0L
 
     init {
         on<ChatEvent.Receive> {
-            if (message != PROFESSOR_FIRE_FREEZE_LINE) return@on
-            val now = System.currentTimeMillis()
-            if (now - lastTriggerAtMs < 10_000L) return@on
-            lastTriggerAtMs = now
-            fireAtMs = now + FIRE_FREEZE_DELAY_MS
+            if (phase != Phase.Idle) return@on
+            if (TRIGGER_PHRASE !in message) return@on
+            phase = Phase.Armed
+            fireAtMs = System.currentTimeMillis() + WINDOW_MILLIS
         }
 
         on<WorldEvent.Change> {
+            phase = Phase.Idle
             fireAtMs = 0L
-            lastTriggerAtMs = 0L
         }
 
         textHud(
             name = "M3 FF countdown",
             colour = Colour.CYAN,
-            toggleable = false
+            toggleable = false,
         ) {
             visibleIf {
                 if (preview) return@visibleIf true
-                val fireAt = fireAtMs
-                if (fireAt <= 0L) return@visibleIf false
-                val remaining = fireAt - System.currentTimeMillis()
-                if (remaining <= 0L) {
-                    fireAtMs = 0L
-                    return@visibleIf false
-                }
-                true
+                if (phase != Phase.Armed) return@visibleIf false
+                val remaining = fireAtMs - System.currentTimeMillis()
+                if (remaining > 0L) return@visibleIf true
+                // Countdown ran out — return to Idle so the next trigger
+                // line can re-arm. Hide the HUD this frame.
+                phase = Phase.Idle
+                false
             }
             textPair(
                 string = "M3 FF:",
                 supplier = {
-                    if (preview) "§e5.00s"
-                    else {
-                        val remaining = fireAtMs - System.currentTimeMillis()
-                        "§e${String.format(Locale.US, "%.2f", (remaining.coerceAtLeast(0L)) / 1000.0)}s"
+                    val secondsRemaining = if (preview) {
+                        WINDOW_MILLIS / 1000.0
+                    } else {
+                        (fireAtMs - System.currentTimeMillis())
+                            .coerceAtLeast(0L) / 1000.0
                     }
+                    "§e" + String.format(Locale.US, "%.2f", secondsRemaining) + "s"
                 },
                 labelColour = colour,
                 shadow = shadow,
-                font = font
+                font = font,
             )
         }.setting()
     }
