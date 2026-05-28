@@ -1,14 +1,14 @@
 package cop.module.impl.dungeon.huds
 
+import cop.api.events.ChatEvent
 import cop.api.events.MouseEvent
 import cop.api.events.RenderEvent
+import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
-import cop.api.skyblock.Island
 import cop.api.skyblock.dungeon.Dungeon.currentDungeonPlayer
 import cop.api.skyblock.dungeon.Dungeon.dungeonTeammates
 import cop.api.skyblock.dungeon.Dungeon.inDungeons
 import cop.api.skyblock.dungeon.DungeonClass
-import cop.api.skyblock.invoke
 import cop.module.Module
 import cop.utils.skyblock.ItemUtils.lore
 import cop.utils.skyblock.ItemUtils.skyblockId
@@ -43,8 +43,7 @@ import kotlin.math.roundToInt
  */
 object CooldownDisplay : Module(
     "Cooldown Display",
-    area = Island.Dungeon,
-    desc = "Visualises ability cooldowns from a 'Cooldown: Xs' tooltip line — greys out the hotbar slot and/or overlays the remaining seconds as a number.",
+    desc = "Visualises ability cooldowns from a 'Cooldown: Xs' tooltip line — greys out the hotbar slot and/or overlays the remaining seconds as a number. Works in dungeons by default; toggle Only in dungeons off to use it anywhere in Skyblock.",
 ) {
 
     // ---- Settings ---------------------------------------------------------
@@ -91,18 +90,59 @@ object CooldownDisplay : Module(
     private val parseCache = HashMap<String, ItemCooldownInfo>()
     /** Last accepted trigger, in wall-clock millis. Used to apply [debounceMillis]. */
     private var lastFireWallMs = 0L
-    /** Active cooldowns, keyed by item identity → wall-clock millis at which
-     *  the cooldown expires. Maintained in parallel with the vanilla cooldown
-     *  table so the numeric overlay can compute remaining time without parsing
-     *  the vanilla `ItemCooldowns` internals. Lazy-evicted on read. */
-    private val activeEndTimes = HashMap<String, Long>()
+    /** Active per-item state, keyed by item identity. Tracks both the "ability
+     *  is currently doing its thing" phase (no overlay) and the "actually on
+     *  cooldown" phase (overlay visible). The TickEvent handler transitions
+     *  vanillaSweepStarted false → true at the active/cooldown boundary, so
+     *  the grey-sweep animation kicks in only for the cooldown half. Lazy-
+     *  evicted as entries expire. */
+    private val tracked = HashMap<String, ActiveCooldown>()
+    /** Item key + cooldown seconds remembered from the last click — needed to
+     *  recover from duration abilities where the lore alone can't predict
+     *  when the cooldown starts. Cleared when used or when world changes. */
+    private var lastClick: LastClickInfo? = null
+    /** A duration ability we've seen the "Activated!" chat for and are now
+     *  waiting on the "De-activated!" chat to start the real cooldown. Null
+     *  outside that window. */
+    private var awaitingDeactivation: DurationActivation? = null
 
-    /** What we managed to extract from one item's tooltip. */
+    /** Snapshot of the most recent click — item key, scaled cooldown seconds
+     *  for that side, wall-clock timestamp. */
+    private data class LastClickInfo(
+        val itemKey: String,
+        val stack: ItemStack,
+        val scaledCooldownSeconds: Double,
+        val clickedAtMs: Long,
+    )
+
+    /** Bookkeeping for the activated→deactivated chat handshake. */
+    private data class DurationActivation(
+        val itemKey: String,
+        val stack: ItemStack,
+        val scaledCooldownSeconds: Double,
+        val activatedAtMs: Long,
+    )
+
+    /** What we managed to extract from one item's tooltip. [durationSeconds]
+     *  is the "ability active for X seconds" Hypixel pattern; items without
+     *  a duration phase leave it null. */
     private data class ItemCooldownInfo(
         val rightSeconds: Double?,
         val leftSeconds: Double?,
+        val durationSeconds: Double?,
         val mentionsRightClick: Boolean,
         val mentionsLeftClick: Boolean,
+    )
+
+    /** Per-active-cooldown state. For instant-trigger abilities,
+     *  activeUntilMs == triggeredAtMs (no active phase) and the cooldown
+     *  starts immediately. For duration abilities, the cooldown phase only
+     *  starts at activeUntilMs. */
+    private data class ActiveCooldown(
+        val stackForVanillaCall: ItemStack,
+        val activeUntilMs: Long,
+        val cooldownEndsAtMs: Long,
+        var vanillaSweepStarted: Boolean,
     )
 
     /** Distinguishes which click side a request applies to. Internal — the
@@ -113,22 +153,36 @@ object CooldownDisplay : Module(
     // ---- Lore parsing -----------------------------------------------------
 
     private val COOLDOWN_LINE = Regex("""(?i)cooldown[:\s]+([\d]+(?:[.,][\d]+)?)\s*s\b""")
+    private val DURATION_LINE = Regex("""(?i)duration[:\s]+([\d]+(?:[.,][\d]+)?)\s*s\b""")
     private val FORMAT_CODE = Regex("""§[0-9A-FK-ORa-fk-or]""")
+    /** Hypixel announces duration-ability state in chat. We use the activated→
+     *  deactivated pair to drive the real cooldown for items whose lore
+     *  doesn't include a `Duration:` line (most of them — "for 10 seconds"
+     *  is more common phrasing, hard to parse cleanly). */
+    private val ABILITY_ACTIVATED = Regex("""^[A-Z][A-Za-z' ]+ Activated!$""")
+    private val ABILITY_DEACTIVATED = Regex("""^[A-Z][A-Za-z' ]+ De-activated!""")
+    /** Max age of a click that an "Activated!" chat can attribute itself to. */
+    private const val CLICK_TO_ACTIVATION_WINDOW_MS = 2_500L
+    /** Max age of an "Activated!" before we stop expecting "De-activated!". */
+    private const val ACTIVATION_TTL_MS = 120_000L
 
     private fun parseLore(stack: ItemStack): ItemCooldownInfo {
-        val lines = stack.lore ?: return ItemCooldownInfo(null, null, false, false)
+        val lines = stack.lore ?: return ItemCooldownInfo(null, null, null, false, false)
 
         // Single forward sweep through the lore. Each line either:
         //   (a) declares which click side the next ability section is for
         //       ("Ability: X  RIGHT CLICK") — toggles `currentSides`,
         //   (b) declares a cooldown ("Cooldown: 6s") — attributed to whatever
         //       sides are currently active,
-        //   (c) is neither and we ignore it.
+        //   (c) declares a duration ("Duration: 10s") — applies item-wide
+        //       (no item we've seen has different durations per click side),
+        //   (d) is none of the above and we ignore it.
         var currentSides: Set<Side> = emptySet()
         var sawRight = false
         var sawLeft = false
         var rightSeconds: Double? = null
         var leftSeconds: Double? = null
+        var durationSeconds: Double? = null
 
         for (rawLine in lines) {
             val clean = rawLine.replace(FORMAT_CODE, "")
@@ -143,6 +197,17 @@ object CooldownDisplay : Module(
                 continue
             }
 
+            // (c) duration line — checked BEFORE cooldown so the substring
+            //     "Duration: 10s\nCooldown: 6s" assigns 10s to the duration
+            //     field and 6s to cooldown, not the other way around. Match
+            //     once per item (first occurrence wins).
+            if (durationSeconds == null) {
+                DURATION_LINE.find(clean)?.let { m ->
+                    m.groupValues[1].replace(',', '.').toDoubleOrNull()?.let { durationSeconds = it }
+                    return@let
+                }
+            }
+
             // (b) cooldown line — only meaningful if we know which sides
             val match = COOLDOWN_LINE.find(clean) ?: continue
             val secs = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: continue
@@ -152,7 +217,7 @@ object CooldownDisplay : Module(
             if (Side.Left  in attribTo && leftSeconds  == null) leftSeconds  = secs
         }
 
-        return ItemCooldownInfo(rightSeconds, leftSeconds, sawRight, sawLeft)
+        return ItemCooldownInfo(rightSeconds, leftSeconds, durationSeconds, sawRight, sawLeft)
     }
 
     /** When a "Cooldown:" line appears without an immediately-preceding
@@ -205,42 +270,62 @@ object CooldownDisplay : Module(
         val cooldownTable = player.cooldowns
         if (cooldownTable.isOnCooldown(stack)) return false
         val key = identityKey(stack)
-        // Also bail out if our own numeric-countdown table already has the
-        // item active. Vanilla cooldowns can be cleared by interactions we
-        // don't track, so we need both checks.
+        // Also bail out if our own tracker has the item active. Vanilla
+        // cooldowns can be cleared by interactions we don't track, so we
+        // need both checks.
         val now = System.currentTimeMillis()
-        activeEndTimes[key]?.let { end -> if (end > now) return false }
+        tracked[key]?.let { existing -> if (existing.cooldownEndsAtMs > now) return false }
 
-        val rawSeconds = lookupSeconds(stack, side) ?: return false
+        val info = parseCache.getOrPut(key) { parseLore(stack) }
+        val rawSeconds = lookupSeconds(info, side) ?: return false
         if (rawSeconds <= 0.0) return false
 
         val scaledSeconds = rawSeconds * mageReductionFactor()
-        val ticks = max(1, (scaledSeconds * 20.0).roundToInt())
+        val cooldownTicks = max(1, (scaledSeconds * 20.0).roundToInt())
 
-        // Vanilla grey-sweep overlay — only registered if the user wants it,
-        // so disabling the sweep cleanly hides it. The numeric countdown
-        // (drawn from activeEndTimes in the RenderEvent.Overlay handler) is
-        // unaffected.
-        if (showGreySweep) cooldownTable.addCooldown(stack, ticks)
-        activeEndTimes[key] = now + (ticks * 50L)
-        // fromUserInput is unused at the moment, but kept as a hook in case
-        // we ever want to emit a different chat message / sfx for user vs.
-        // synthetic triggers.
+        // Items with "Duration: Xs" in lore have an active phase first (during
+        // which the cooldown HASN'T started yet on Hypixel's side). The overlay
+        // would be misleading there — show nothing until the active phase ends.
+        val durationMs = ((info.durationSeconds ?: 0.0) * 1000.0).toLong()
+        val activeUntilMs = now + durationMs
+        val cooldownEndsAtMs = activeUntilMs + (cooldownTicks * 50L)
+
+        val entry = ActiveCooldown(
+            stackForVanillaCall = stack,
+            activeUntilMs = activeUntilMs,
+            cooldownEndsAtMs = cooldownEndsAtMs,
+            vanillaSweepStarted = false,
+        )
+        tracked[key] = entry
+
+        // Instant abilities (no Duration line in lore): start the vanilla
+        // sweep right now. Duration abilities: deferred — TickEvent will
+        // flip vanillaSweepStarted true and call addCooldown when the active
+        // phase ends.
+        if (durationMs == 0L && showGreySweep) {
+            cooldownTable.addCooldown(stack, cooldownTicks)
+            entry.vanillaSweepStarted = true
+        }
+        // Remember this click — the chat-based override (Activated/De-activated
+        // pair) only knows which item the message belongs to via "was just
+        // clicked". 60-second TTL is enforced at use time.
+        if (fromUserInput) {
+            lastClick = LastClickInfo(key, stack, scaledSeconds, now)
+        }
         return true
     }
 
-    private fun lookupSeconds(stack: ItemStack, side: Side): Double? {
-        val key = identityKey(stack)
-        val info = parseCache.getOrPut(key) { parseLore(stack) }
-
+    private fun lookupSeconds(info: ItemCooldownInfo, side: Side): Double? {
         val explicit = when (side) {
             Side.Right -> info.rightSeconds
             Side.Left  -> info.leftSeconds
         }
         if (explicit != null) return explicit
 
-        // No explicit duration. Fall back if (a) the user enabled it and (b)
-        // the matching side at least exists in the lore.
+        // No explicit cooldown. Fall back if (a) the user enabled a fallback
+        // and (b) the matching click side at least exists in the lore — we
+        // shouldn't slap a cooldown on items that have no ability of that
+        // side at all.
         val sideMentioned = when (side) {
             Side.Right -> info.mentionsRightClick
             Side.Left  -> info.mentionsLeftClick
@@ -322,8 +407,97 @@ object CooldownDisplay : Module(
 
         on<WorldEvent.Change> {
             parseCache.clear()
-            activeEndTimes.clear()
+            tracked.clear()
+            lastClick = null
+            awaitingDeactivation = null
             lastFireWallMs = 0L
+        }
+
+        // Chat-driven override for duration abilities (Wither Cloak, Creeper
+        // Veil, etc.). Hypixel announces these as
+        //   "<Ability> Activated!"
+        //   "<Ability> De-activated! (Expired)"   (or "(Cancelled)" on early end)
+        // The lore-based prediction we kicked off on the click ran the
+        // countdown DURING the active phase, which is wrong — the real
+        // cooldown only starts once Hypixel says De-activated. So: on
+        // Activated within a few seconds of our most recent click, evict
+        // the predicted entry; on De-activated, install a fresh entry that
+        // starts the cooldown right NOW with the lore-parsed duration.
+        on<ChatEvent.Receive> {
+            val plain = message.replace(FORMAT_CODE, "")
+            val now = System.currentTimeMillis()
+
+            // Sweep stale activation state — if an ability somehow never
+            // sends its De-activated message, we shouldn't sit on stale
+            // bookkeeping forever.
+            awaitingDeactivation?.let { da ->
+                if (now - da.activatedAtMs > ACTIVATION_TTL_MS) awaitingDeactivation = null
+            }
+
+            if (ABILITY_ACTIVATED.matches(plain)) {
+                val click = lastClick ?: return@on
+                if (now - click.clickedAtMs > CLICK_TO_ACTIVATION_WINDOW_MS) return@on
+                // This is a duration ability — the predicted countdown was
+                // wrong. Drop it from our tracker so the numeric overlay
+                // stops showing. The vanilla grey-sweep we already armed
+                // would need a ResourceLocation to cancel which isn't
+                // straightforward across MC versions — but the predicted
+                // duration usually expires around the same time as the
+                // De-activated chat fires for items where active ≈ cooldown
+                // length (the common case), so it self-corrects visually.
+                tracked.remove(click.itemKey)
+                awaitingDeactivation = DurationActivation(
+                    itemKey = click.itemKey,
+                    stack = click.stack,
+                    scaledCooldownSeconds = click.scaledCooldownSeconds,
+                    activatedAtMs = now,
+                )
+                lastClick = null
+                return@on
+            }
+
+            if (ABILITY_DEACTIVATED.containsMatchIn(plain)) {
+                val pending = awaitingDeactivation ?: return@on
+                awaitingDeactivation = null
+                val ticks = max(1, (pending.scaledCooldownSeconds * 20.0).roundToInt())
+                val entry = ActiveCooldown(
+                    stackForVanillaCall = pending.stack,
+                    activeUntilMs = now,
+                    cooldownEndsAtMs = now + (ticks * 50L),
+                    vanillaSweepStarted = false,
+                )
+                tracked[pending.itemKey] = entry
+                if (showGreySweep) {
+                    mc.player?.cooldowns?.addCooldown(pending.stack, ticks)
+                    entry.vanillaSweepStarted = true
+                }
+            }
+        }
+
+        // Phase transition + GC: walk tracked entries each tick, evict expired
+        // ones, and on the active→cooldown boundary kick off the vanilla
+        // grey-sweep with the remaining ticks. Cheap — tracked is usually
+        // 0..2 entries.
+        on<TickEvent.End> {
+            if (tracked.isEmpty()) return@on
+            val now = System.currentTimeMillis()
+            val player = mc.player
+            val it = tracked.entries.iterator()
+            while (it.hasNext()) {
+                val entry = it.next().value
+                if (now >= entry.cooldownEndsAtMs) {
+                    it.remove()
+                    continue
+                }
+                if (!entry.vanillaSweepStarted && now >= entry.activeUntilMs) {
+                    if (showGreySweep && player != null) {
+                        val remainingMs = entry.cooldownEndsAtMs - now
+                        val ticks = max(1, ((remainingMs / 1000.0) * 20.0).roundToInt())
+                        player.cooldowns.addCooldown(entry.stackForVanillaCall, ticks)
+                    }
+                    entry.vanillaSweepStarted = true
+                }
+            }
         }
 
         // Numeric countdown — per-frame HUD overlay. We avoid drawing while
@@ -335,7 +509,7 @@ object CooldownDisplay : Module(
             val player = mc.player ?: return@on
             if (mc.screen != null) return@on
             if (dungeonsOnly && !inDungeons) return@on
-            if (activeEndTimes.isEmpty()) return@on
+            if (tracked.isEmpty()) return@on
 
             val window = mc.window
             val w = window.guiScaledWidth
@@ -350,12 +524,13 @@ object CooldownDisplay : Module(
                 val stack = player.inventory.getItem(slotIndex)
                 if (stack.isEmpty) continue
                 val key = identityKey(stack)
-                val end = activeEndTimes[key] ?: continue
-                val remaining = end - now
-                if (remaining <= 0) {
-                    activeEndTimes.remove(key)
-                    continue
-                }
+                val entry = tracked[key] ?: continue
+                // Active phase: ability is doing its thing on Hypixel's side,
+                // the cooldown hasn't actually started. Drawing a countdown
+                // here would be misleading — leave the slot clean.
+                if (now < entry.activeUntilMs) continue
+                val remaining = entry.cooldownEndsAtMs - now
+                if (remaining <= 0) continue  // TickEvent will evict shortly
                 val label = formatCountdown(remaining)
                 val labelWidth = font.width(label)
                 val slotX = hotbarLeft + slotIndex * HOTBAR_SLOT_WIDTH
