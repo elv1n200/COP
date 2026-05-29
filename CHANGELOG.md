@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] — 2026-05-29
+
+### Added
+- **Secret Routes** (Dungeons / Worldrender) — neues Modul, rendert pro Dungeon-Raum die bekannten Secret-Routen als Welt-Linie + farbige Boxen pro Waypoint-Typ (Etherwarp, Mine, Interact, TNT, Secret-Ziel). Routen-Daten von [yourboykyle's Secret Routes Mod](https://github.com/yourboykyle/SecretRoutes) (GPL-3.0) als `assets/cop/secretroutes/{routes,pearlroutes}.json` mitgebündelt; deren 17 MB Skeleton-Room-Detection-Bundle ist nicht nötig weil COP Räume bereits über Odins Bedrock-Core-Hash identifiziert. Display-only — kein Playback, kein Auto-Walk. (Tier 2: Pearl-Launch-Angle-Linien folgen.)
+- **CREDITS**: neuer Eintrag für yourboykyle / R-aMcC / itplays / zzyyrraa, Hunchclient-Eintrag entfernt nachdem Custom Mage Beam clean-room neu geschrieben wurde.
+
+### Fixed
+- **Dungeon.dungeonTeammates** ist jetzt durchgehend ein `CopyOnWriteArrayList` — die punktuellen `.toList()`-Snapshots in `MapRenderer` hatten andere Iterations-Sites in `Dungeon.kt` und `DungeonEnums.kt` nicht abgedeckt. Crash trat hauptsächlich auf langsameren Clients in Dungeons auf.
+
 ## [1.3.1] — 2026-05-26
 
 ### Fixed
