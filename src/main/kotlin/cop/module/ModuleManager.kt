@@ -36,6 +36,7 @@ object ModuleManager {
             FullBlockHitboxes,
             FuckDiorite,
             PersistentSecretHeads,
+            SecretRoutes,
 
             // --- HUD timers / counters / per-floor info ---------------
             Splits,
