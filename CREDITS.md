@@ -54,6 +54,14 @@ Konzepte und Ports für: Auto RCM, Auto LCM, M3 Auto FF, M3 FF Display, Cooldown
 
 (Hinweis: die `Port of …`-Header in den Source-Dateien referenzieren teils noch das alte `com.github.noamm9.critsaddons.*`-Package — das ist nur der Build-Pfad, nicht die Authorenangabe.)
 
+## Secret Routes Mod — GPL-3.0
+
+© [yourboykyle](https://github.com/yourboykyle) & [R-aMcC (wyannnnn)](https://github.com/R-aMcC), mit Routen-Daten von [itplays](https://github.com/itplays) und [zzyyrraa](https://github.com/zzyyrraa).
+
+Liefert die Secret-Routen-Daten (`routes.json` + `pearlroutes.json`) die das `Secret Routes`-Modul rendert. Die JSON-Dateien sind verbatim aus dem [Secret Routes Mod Repo](https://github.com/yourboykyle/SecretRoutes) unter `src/main/resources/assets/cop/secretroutes/` mitgebündelt, inklusive der originalen `#origin` / `#copyright` Header-Keys.
+
+Die COP-seitige Render-/Lookup-Implementierung ist eigenständig (room detection läuft über Odin Scanning statt der dort verwendeten Skeleton-Matches, daher müssen wir die ~17 MB Skeleton-Assets nicht bündeln).
+
 ## libautoupdate — MIT
 
 © [nea (moe.nea)](https://github.com/nea89o). Wird für das `Auto Updater`-Modul verwendet. Die Bibliothek wird über `include(...)` in die Mod-Jar gebündelt.
