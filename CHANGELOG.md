@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] — 2026-05-29
+
+### Added
+- **Secret Routes**: drei Erweiterungen aus dem ursprünglichen Feature-Backlog.
+  - **Auto-advance**: einmal-eingesammelte Secrets werden ausgeblendet und die aktive Route springt automatisch zum nächstgelegenen verbliebenen Secret. Hooks auf `DungeonEvent.Secret.{Interact,Item,Bat}` plus pro-Frame Block-Check (fängt INTERACT-Secrets ab die jemand anderes im Party schon abgeräumt hat). Schalter "Auto-advance" — default an.
+  - **Beacon beam**: dünne translucent vertikale Säule über jedem Secret-Target, in der Secret-Type-Farbe — von weit weg durch Wände sichtbar. (Reimplementiert als hohes filled box weil MCs `BeaconRenderer` auf 1.21.10 jetzt über `SubmitNodeCollector` läuft und nicht aus `WorldRenderContext` heraus aufrufbar ist.) Schalter "Beacon beam" — default an.
+  - **Pearl trajectories** (Tier 2): bündelt die `pearlroutes.json`-Routen aus. An jeder Pearl-Throw-Position wird ein kleiner Marker gezeichnet plus eine 10-Block-Linie entlang `(pitch, yaw)` damit man weiß wohin man werfen muss. Schalter "Pearl trajectories" — default an. Pearl-Schema in `RouteData` von `List<BlockPos>` auf `List<Vec3>` + `List<PitchYaw>` umgestellt um die Fractional-Precision zu bewahren (vorher hat die Int-Konversion die Throw-Positionen kaputtgerundet).
+
 ## [1.3.2] — 2026-05-29
 
 ### Added

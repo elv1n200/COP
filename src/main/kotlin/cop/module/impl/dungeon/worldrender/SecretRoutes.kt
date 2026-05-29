@@ -1,6 +1,8 @@
 package cop.module.impl.dungeon.worldrender
 
 import net.minecraft.core.BlockPos
+import net.minecraft.world.level.block.Blocks
+import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
 import cop.api.colour.Colour
 import cop.api.colour.withAlpha
@@ -11,6 +13,7 @@ import cop.api.skyblock.Island
 import cop.api.skyblock.dungeon.Dungeon.inBoss
 import cop.api.skyblock.dungeon.Dungeon.inDungeons
 import cop.api.skyblock.dungeon.odonscanning.RouteData
+import cop.api.skyblock.dungeon.odonscanning.RouteData.PitchYaw
 import cop.api.skyblock.dungeon.odonscanning.RouteData.SecretType
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
 import cop.api.skyblock.invoke
@@ -22,6 +25,8 @@ import cop.utils.render.drawLine
 import cop.utils.render.drawText
 import cop.utils.render.drawWireFrameBox
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Renders secret routes for the current dungeon room as world-space waypoints.
@@ -32,9 +37,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * pre-translate them to world coords via [OdonRoom.getRealCoords], so the render
  * loop is just iteration + draw calls.
  *
- * By default only the route to the **nearest secret** in the room is drawn — most
- * rooms have 2–8 secrets and rendering every alternate for every secret simultaneously
- * is visually overwhelming. Flip [showAllSecrets] on for the whole-room overview.
+ * By default only the route to the **nearest still-uncollected secret** in the
+ * room is drawn — most rooms have 2–8 secrets and rendering every alternate for
+ * every secret simultaneously is visually overwhelming. As you complete secrets
+ * (head clicked, bat killed, item picked up) the active route auto-advances to
+ * the next nearest one. Flip [showAllSecrets] on for the whole-room overview.
  *
  * Display only. There is no playback, no auto-walk, no clicking. The original COP
  * port that *did* play routes back was removed (commit `9cdbbf9`) for being too
@@ -55,6 +62,18 @@ object SecretRoutes : Module(
         "Show alternates", false,
         desc = "When a secret has multiple known routes, show all of them instead of just the one whose first waypoint is closest to you."
     )
+    private val autoAdvance by switch(
+        "Auto-advance", true,
+        desc = "Mark secrets you've already collected as done (via secret-interact / item-pickup / bat-kill events) so the active route auto-switches to the next nearest one."
+    )
+    private val showBeacon by switch(
+        "Beacon beam", true,
+        desc = "Draw a tall translucent vertical column on each secret target so you can spot them through walls from across the room."
+    )
+    private val showPearls by switch(
+        "Pearl trajectories", true,
+        desc = "Render pearl-throw positions + a line along the look angle showing where to aim the ender pearl. Comes from the pearl-route DB (a few rooms have these)."
+    )
     private val showStartMarker by switch(
         "Mark start", true,
         desc = "Draw a wireframe box at the first waypoint of each rendered route so you can tell where to begin."
@@ -70,6 +89,10 @@ object SecretRoutes : Module(
     private val lineThickness by slider(
         "Line thickness", 3.0f, 0.5f, 10.0f, 0.1f,
         desc = "Polyline thickness in pixels."
+    )
+    private val pearlLineThickness by slider(
+        "Pearl line thickness", 2.5f, 0.5f, 10.0f, 0.1f,
+        desc = "Thickness of pearl-trajectory preview lines."
     )
     private val startThickness by slider(
         "Start outline thickness", 4.0f, 0.5f, 10.0f, 0.1f,
@@ -104,6 +127,10 @@ object SecretRoutes : Module(
         "TNT", Colour.ORANGE.withAlpha(0.35f), allowAlpha = true,
         desc = "Block to place TNT on / Superboom."
     )
+    private val pearlColour by colourPicker(
+        "Pearl", Colour.CYAN.withAlpha(0.85f), allowAlpha = true,
+        desc = "Pearl throw position marker + trajectory preview line."
+    )
 
     // Per-secret-type target colours — knowing the type at a glance tells you
     // what to do (chest → open, bat → wait, item → walk to ground, etc.).
@@ -130,27 +157,42 @@ object SecretRoutes : Module(
 
     // -- Pre-translated route state ----------------------------------------
 
+    private data class WorldPearl(val throwPos: Vec3, val angle: PitchYaw)
+
     private data class WorldRoute(
         val locations: List<Vec3>,
         val etherwarps: List<BlockPos>,
         val mines: List<BlockPos>,
         val interacts: List<BlockPos>,
         val tnts: List<BlockPos>,
+        val pearls: List<WorldPearl>,
         val secret: WorldSecret?,
     )
 
     private data class WorldSecret(val type: SecretType, val pos: BlockPos)
 
     /** Grouped by secret index so "single nearest secret" + "alternates" filters work. */
-    private data class RoutesForSecret(val secretIndex: Int, val alternates: List<WorldRoute>) {
+    private class RoutesForSecret(val secretIndex: Int, val alternates: List<WorldRoute>) {
         /** Anchor used for "which secret is closest to the player" — prefer the
          *  secret target itself (the thing you're trying to reach); fall back to
          *  the first waypoint of any alternate if no secret position is recorded. */
         val anchor: Vec3? = alternates.firstNotNullOfOrNull { it.secret?.let { s -> Vec3.atCenterOf(s.pos) } }
             ?: alternates.firstNotNullOfOrNull { it.locations.firstOrNull() }
+        /** Flipped to true by auto-advance event hooks (or the per-frame block
+         *  re-check for INTERACT secrets). Once true the group is skipped for
+         *  both "nearest" pick and target-box rendering. @Volatile because the
+         *  event handlers are dispatched on the network thread. */
+        @Volatile var collected: Boolean = false
     }
 
     private val activeRoutes = CopyOnWriteArrayList<RoutesForSecret>()
+
+    /** Auto-advance hit radii — how close an event's position must be to a
+     *  recorded secret to count as "this is the one that fired". Bats need a
+     *  larger window since they fly around before being killed. */
+    private const val INTERACT_HIT_RADIUS = 4.0
+    private const val ITEM_HIT_RADIUS = 4.0
+    private const val BAT_HIT_RADIUS = 8.0
 
     init {
         on<DungeonEvent.Room.Enter> {
@@ -161,28 +203,51 @@ object SecretRoutes : Module(
             activeRoutes.clear()
         }
 
+        // Auto-advance hooks --------------------------------------------------
+        on<DungeonEvent.Secret.Interact> {
+            if (!autoAdvance) return@on
+            markCollectedNearest(Vec3.atCenterOf(blockPos), INTERACT_HIT_RADIUS) {
+                it == SecretType.INTERACT || it == SecretType.UNKNOWN
+            }
+        }
+        on<DungeonEvent.Secret.Item> {
+            if (!autoAdvance) return@on
+            markCollectedNearest(entity.position(), ITEM_HIT_RADIUS) { it == SecretType.ITEM }
+        }
+        on<DungeonEvent.Secret.Bat> {
+            if (!autoAdvance) return@on
+            markCollectedNearest(Vec3(packet.x, packet.y, packet.z), BAT_HIT_RADIUS) { it == SecretType.BAT }
+        }
+
         on<RenderEvent.World> {
             if (!inDungeons || inBoss) return@on
             if (activeRoutes.isEmpty()) return@on
 
-            val playerPos = mc.player?.position()
+            // Catch INTERACT secrets that got collected without a Secret.Interact
+            // event (e.g. another party member clicked, or we entered the room
+            // after they were already gone). Cheap — at most ~8 getBlockState
+            // calls per frame.
+            if (autoAdvance) refreshInteractCollected()
 
-            // Always draw a small target marker for EVERY secret in the room so
-            // the player has spatial awareness of where the goals are — even
-            // when only one route's full path is rendered. Keeps "show only
-            // nearest" usable: you can still see the other 7 secrets without
-            // their lines/waypoints cluttering the view.
+            val playerPos = mc.player?.position()
+            val visibleGroups = activeRoutes.filter { !it.collected }
+
+            // Always draw a small target marker for EVERY still-uncollected
+            // secret in the room so the player has spatial awareness even when
+            // only one route's full path is rendered.
             if (!showAllSecrets) {
-                for (group in activeRoutes) {
+                for (group in visibleGroups) {
                     val s = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
-                    drawBoxes(listOf(s.pos), colourForSecret(s.type))
+                    drawSecretTarget(s)
                 }
             }
 
-            val groupsToDraw = if (showAllSecrets || playerPos == null) {
-                activeRoutes
+            val groupsToDraw = if (showAllSecrets) {
+                visibleGroups
             } else {
-                listOf(nearestGroup(playerPos) ?: return@on)
+                val nearest = playerPos?.let { p -> visibleGroups.minByOrNull { it.anchor?.distanceToSqr(p) ?: Double.MAX_VALUE } }
+                    ?: visibleGroups.firstOrNull()
+                if (nearest == null) return@on else listOf(nearest)
             }
 
             for (group in groupsToDraw) {
@@ -229,7 +294,54 @@ object SecretRoutes : Module(
         drawBoxes(route.mines, mineColour)
         drawBoxes(route.interacts, interactColour)
         drawBoxes(route.tnts, tntColour)
-        route.secret?.let { drawBoxes(listOf(it.pos), colourForSecret(it.type)) }
+        if (showPearls) drawPearls(route.pearls)
+        route.secret?.let { drawSecretTarget(it) }
+    }
+
+    /** Draw the secret-target box and (optionally) the beacon column. */
+    private fun RenderEvent.World.drawSecretTarget(s: WorldSecret) {
+        val depth = !throughWalls
+        val targetColour = colourForSecret(s.type)
+        ctx.drawFilledBox(s.pos.aabb, targetColour, depth = depth)
+        if (showBeacon) {
+            val beamColour = targetColour.withAlpha(0.18f)
+            // 0.3-block-wide vertical column from the floor up to build limit.
+            // Using a single tall AABB instead of MC's BeaconRenderer because
+            // the 1.21.10 BeaconRenderer API moved to the deferred-render
+            // SubmitNodeCollector pipeline which WorldRenderContext doesn't
+            // expose — a translucent filled box gives the same "spot it from
+            // far across the room" affordance for ~3 lines of code.
+            val cx = s.pos.x + 0.5
+            val cz = s.pos.z + 0.5
+            val beam = AABB(cx - 0.15, s.pos.y.toDouble(), cz - 0.15, cx + 0.15, 320.0, cz + 0.15)
+            ctx.drawFilledBox(beam, beamColour, depth = depth)
+        }
+    }
+
+    private fun RenderEvent.World.drawPearls(pearls: List<WorldPearl>) {
+        if (pearls.isEmpty()) return
+        val depth = !throughWalls
+        for (p in pearls) {
+            // Small marker box at the throw position (player feet), 0.5 cube.
+            val markBox = AABB(p.throwPos.x - 0.25, p.throwPos.y, p.throwPos.z - 0.25,
+                               p.throwPos.x + 0.25, p.throwPos.y + 0.5, p.throwPos.z + 0.25)
+            ctx.drawFilledBox(markBox, pearlColour, depth = depth)
+
+            // Eye position + 10-block ray along the look direction. Matches the
+            // upstream SecretRoutes mod's pearl preview (which also draws a
+            // straight 10-block ray, not a parabolic arc — the ray approximates
+            // the pearl's first ~1 second of flight before gravity bends it).
+            val yawRad = Math.toRadians(p.angle.yaw.toDouble())
+            val pitchRad = Math.toRadians(p.angle.pitch.toDouble())
+            val cosP = cos(pitchRad)
+            val dx = -sin(yawRad) * cosP
+            val dy = -sin(pitchRad)
+            val dz =  cos(yawRad) * cosP
+            val length = 10.0
+            val eye = Vec3(p.throwPos.x, p.throwPos.y + 1.62, p.throwPos.z)
+            val end = Vec3(eye.x + dx * length, eye.y + dy * length, eye.z + dz * length)
+            ctx.drawLine(listOf(eye, end), pearlColour, depth = depth, thickness = pearlLineThickness)
+        }
     }
 
     private fun RenderEvent.World.drawBoxes(positions: List<BlockPos>, colour: Colour) {
@@ -247,13 +359,49 @@ object SecretRoutes : Module(
         SecretType.UNKNOWN  -> secretInteractColour
     }
 
-    private fun nearestGroup(player: Vec3): RoutesForSecret? =
-        activeRoutes.minByOrNull { it.anchor?.distanceToSqr(player) ?: Double.MAX_VALUE }
-
     private fun firstWaypointSqr(route: WorldRoute, player: Vec3): Double {
         val first = route.locations.firstOrNull() ?: return Double.MAX_VALUE
         return first.distanceToSqr(player)
     }
+
+    // -- Auto-advance plumbing ---------------------------------------------
+
+    /** Mark the closest uncollected secret matching [typePredicate] within
+     *  [radius] blocks of [eventPos] as collected. No-op if no match. */
+    private fun markCollectedNearest(eventPos: Vec3, radius: Double, typePredicate: (SecretType) -> Boolean) {
+        if (activeRoutes.isEmpty()) return
+        val r2 = radius * radius
+        var best: RoutesForSecret? = null
+        var bestSqr = r2
+        for (group in activeRoutes) {
+            if (group.collected) continue
+            val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
+            if (!typePredicate(secret.type)) continue
+            val d2 = Vec3.atCenterOf(secret.pos).distanceToSqr(eventPos)
+            if (d2 <= bestSqr) {
+                bestSqr = d2
+                best = group
+            }
+        }
+        best?.collected = true
+    }
+
+    /** INTERACT secrets that got removed without firing our event (e.g. a
+     *  party-mate clicked them) — detect by checking the block at the recorded
+     *  position is no longer a player head. Called once per render frame. */
+    private fun refreshInteractCollected() {
+        val level = mc.level ?: return
+        for (group in activeRoutes) {
+            if (group.collected) continue
+            val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
+            if (secret.type != SecretType.INTERACT && secret.type != SecretType.UNKNOWN) continue
+            if (!level.getBlockState(secret.pos).`is`(Blocks.PLAYER_HEAD)) {
+                group.collected = true
+            }
+        }
+    }
+
+    // -- Room enter --------------------------------------------------------
 
     private fun onRoomEnter(room: OdonRoom?) {
         activeRoutes.clear()
@@ -270,6 +418,12 @@ object SecretRoutes : Module(
                     mines = r.mines.map(room::getRealCoords),
                     interacts = r.interacts.map(room::getRealCoords),
                     tnts = r.tnts.map(room::getRealCoords),
+                    pearls = r.pearls.zip(r.pearlAngles) { pos, ang ->
+                        WorldPearl(
+                            throwPos = room.getRealCoords(pos),
+                            angle = PitchYaw(ang.pitch, room.getRealYaw(ang.yaw)),
+                        )
+                    },
                     secret = r.secret?.let { WorldSecret(it.type, room.getRealCoords(it.location)) },
                 )
             }

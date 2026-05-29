@@ -4,6 +4,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import net.minecraft.core.BlockPos
+import net.minecraft.world.phys.Vec3
 import cop.CopMod.logger
 
 /**
@@ -48,14 +49,20 @@ object RouteData {
 
     data class Secret(val type: SecretType, val location: BlockPos)
 
+    /** Player look direction at the moment a pearl was thrown. Yaw is in the
+     *  room's canonical orientation; rotate to world via [OdonRoom.getRealYaw]. */
+    data class PitchYaw(val pitch: Float, val yaw: Float)
+
     data class Route(
         val locations: List<BlockPos>,
         val etherwarps: List<BlockPos>,
         val mines: List<BlockPos>,
         val interacts: List<BlockPos>,
         val tnts: List<BlockPos>,
-        val pearls: List<BlockPos>,
-        val pearlAngles: List<BlockPos>,
+        /** Pearl throw positions (player feet, fractional precision). Parallel
+         *  to [pearlAngles]: pearls[i] is thrown with angle pearlAngles[i]. */
+        val pearls: List<Vec3>,
+        val pearlAngles: List<PitchYaw>,
         val secret: Secret?,
     )
 
@@ -126,8 +133,8 @@ object RouteData {
         mines = readPosList(obj, "mines"),
         interacts = readPosList(obj, "interacts"),
         tnts = readPosList(obj, "tnts"),
-        pearls = readPosList(obj, "enderpearls"),
-        pearlAngles = readPosList(obj, "enderpearlangles"),
+        pearls = readVec3List(obj, "enderpearls"),
+        pearlAngles = readPitchYawList(obj, "enderpearlangles"),
         secret = parseSecret(obj.getAsJsonObject("secret")),
     )
 
@@ -150,6 +157,28 @@ object RouteData {
             BlockPos(arr.get(0).asInt, arr.get(1).asInt, arr.get(2).asInt)
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /** Pearl-throw positions are recorded as the player's exact feet position,
+     *  so the x/y/z are fractional doubles. Keep that precision (a 0.7 offset
+     *  matters for the trajectory preview). */
+    private fun readVec3List(obj: JsonObject, key: String): List<Vec3> {
+        val arr = obj.getAsJsonArray(key) ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val a = el as? JsonArray ?: return@mapNotNull null
+            if (a.size() < 3) return@mapNotNull null
+            try { Vec3(a.get(0).asDouble, a.get(1).asDouble, a.get(2).asDouble) } catch (_: Exception) { null }
+        }
+    }
+
+    /** Pearl-throw angles are recorded as 2-element [pitch, yaw] arrays. */
+    private fun readPitchYawList(obj: JsonObject, key: String): List<PitchYaw> {
+        val arr = obj.getAsJsonArray(key) ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val a = el as? JsonArray ?: return@mapNotNull null
+            if (a.size() < 2) return@mapNotNull null
+            try { PitchYaw(a.get(0).asFloat, a.get(1).asFloat) } catch (_: Exception) { null }
         }
     }
 }
