@@ -8,11 +8,16 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [1.3.2] — 2026-05-29
 
 ### Added
-- **Secret Routes** (Dungeons / Worldrender) — neues Modul, rendert pro Dungeon-Raum die bekannten Secret-Routen als Welt-Linie + farbige Boxen pro Waypoint-Typ (Etherwarp, Mine, Interact, TNT, Secret-Ziel). Routen-Daten von [yourboykyle's Secret Routes Mod](https://github.com/yourboykyle/SecretRoutes) (GPL-3.0) als `assets/cop/secretroutes/{routes,pearlroutes}.json` mitgebündelt; deren 17 MB Skeleton-Room-Detection-Bundle ist nicht nötig weil COP Räume bereits über Odins Bedrock-Core-Hash identifiziert. Display-only — kein Playback, kein Auto-Walk. (Tier 2: Pearl-Launch-Angle-Linien folgen.)
+- **Secret Routes** (Dungeons / Worldrender) — neues Modul, rendert pro Dungeon-Raum die bekannten Secret-Routen als Welt-Linie + farbige Boxen pro Waypoint-Typ. Routen-Daten von [yourboykyle's Secret Routes Mod](https://github.com/yourboykyle/SecretRoutes) (GPL-3.0) als `assets/cop/secretroutes/{routes,pearlroutes}.json` mitgebündelt; deren 17 MB Skeleton-Room-Detection-Bundle ist nicht nötig weil COP Räume bereits über Odins Bedrock-Core-Hash identifiziert. Display-only — kein Playback, kein Auto-Walk. (Tier 2: Pearl-Launch-Angle-Linien folgen.)
+  - **Default UX**: nur die Route zum *nächstgelegenen* Secret im Raum bekommt Linie + Waypoints; alle anderen Secrets in dem Raum bekommen trotzdem einen kleinen Target-Cube als Übersicht. Schalter "Show all secrets" für die volle Übersicht.
+  - **Start-Marker**: Wireframe-Box mit "Start"-Label am ersten Waypoint, plus 1/2/3-Nummern über jedem Walking-Waypoint damit die Reihenfolge klar ist.
+  - **Per-Secret-Type Farben**: Interact / Bat / Item / Chest / Exit haben unterschiedliche Target-Colours statt einem generischen Rot.
+  - **Room-Name-Normalisierung**: Die Routen-DB verwendet Kebab-Case (`Super-Tall`, `Arrow-Trap`), `odon_rooms.json` verwendet Spaces oder Concatenation (`Supertall`, `Arrow Trap`). Lookup vergleicht jetzt lowercase-alphanumeric — bringt ~40 Räume wieder zurück die vorher silently leer waren.
 - **CREDITS**: neuer Eintrag für yourboykyle / R-aMcC / itplays / zzyyrraa, Hunchclient-Eintrag entfernt nachdem Custom Mage Beam clean-room neu geschrieben wurde.
 
 ### Fixed
 - **Dungeon.dungeonTeammates** ist jetzt durchgehend ein `CopyOnWriteArrayList` — die punktuellen `.toList()`-Snapshots in `MapRenderer` hatten andere Iterations-Sites in `Dungeon.kt` und `DungeonEnums.kt` nicht abgedeckt. Crash trat hauptsächlich auf langsameren Clients in Dungeons auf.
+- **AutoUpdater**: Update-Popup wurde auch dann gezeigt wenn die lokale Version *neuer* ist als das letzte GitHub-Release (z.B. "Update verfügbar: 1.3.2 → 1.3.1" — also Downgrade-Prompt). `libautoupdate.isUpdateAvailable` ist nur eine Tag-String-Inequality; jetzt wird zusätzlich Komponenten-weise Semver verglichen und das Popup nur bei echtem Remote > Local geöffnet.
 
 ## [1.3.1] — 2026-05-26
 
