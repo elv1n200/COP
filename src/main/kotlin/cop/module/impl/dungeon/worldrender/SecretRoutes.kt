@@ -18,20 +18,21 @@ import cop.module.Module
 import cop.utils.aabb
 import cop.utils.render.drawFilledBox
 import cop.utils.render.drawLine
+import cop.utils.render.drawWireFrameBox
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Renders secret routes for the current dungeon room as world-space waypoints.
  *
- * The route DB ships with COP at `assets/cop/secretroutes/{routes,pearlroutes}.json`,
+ * Route data ships with COP at `assets/cop/secretroutes/{routes,pearlroutes}.json`,
  * sourced from yourboykyle's Secret Routes Mod (see `CREDITS.md`). Coordinates in
  * the DB are room-canonical; on room enter we look them up by [OdonRoom.name] and
  * pre-translate them to world coords via [OdonRoom.getRealCoords], so the render
  * loop is just iteration + draw calls.
  *
- * Per secret the DB may carry multiple alternate routes — by default we show the
- * one whose first waypoint is closest to the player, to avoid visual clutter; flip
- * [showAllRoutes] off-by-default to expose all of them.
+ * By default only the route to the **nearest secret** in the room is drawn — most
+ * rooms have 2–8 secrets and rendering every alternate for every secret simultaneously
+ * is visually overwhelming. Flip [showAllSecrets] on for the whole-room overview.
  *
  * Display only. There is no playback, no auto-walk, no clicking. The original COP
  * port that *did* play routes back was removed (commit `9cdbbf9`) for being too
@@ -44,13 +45,25 @@ object SecretRoutes : Module(
 ) {
     // -- Settings -----------------------------------------------------------
 
-    private val showAllRoutes by switch(
-        "Show all routes", false,
-        desc = "If off, only the route whose first waypoint is closest to you is shown per secret. If on, all known routes are drawn."
+    private val showAllSecrets by switch(
+        "Show all secrets", false,
+        desc = "On: every secret's route in the room is rendered at once (busy view). Off: only the route to the secret closest to you."
+    )
+    private val showAllAlternates by switch(
+        "Show alternates", false,
+        desc = "When a secret has multiple known routes, show all of them instead of just the one whose first waypoint is closest to you."
+    )
+    private val showStartMarker by switch(
+        "Mark start", true,
+        desc = "Draw a wireframe box at the first waypoint of each rendered route so you can tell where to begin."
     )
     private val lineThickness by slider(
         "Line thickness", 3.0f, 0.5f, 10.0f, 0.1f,
         desc = "Polyline thickness in pixels."
+    )
+    private val startThickness by slider(
+        "Start outline thickness", 4.0f, 0.5f, 10.0f, 0.1f,
+        desc = "Thickness of the start-marker box outline."
     )
     private val throughWalls by switch(
         "Through walls", true,
@@ -60,6 +73,10 @@ object SecretRoutes : Module(
     private val lineColour by colourPicker(
         "Line", Colour.CYAN.withAlpha(0.85f), allowAlpha = true,
         desc = "Walking path between locations."
+    )
+    private val startColour by colourPicker(
+        "Start", Colour.LIME.withAlpha(0.9f), allowAlpha = true,
+        desc = "Wireframe box at the route's first waypoint."
     )
     private val etherwarpColour by colourPicker(
         "Etherwarp", Colour.BLUE.withAlpha(0.35f), allowAlpha = true,
@@ -77,9 +94,28 @@ object SecretRoutes : Module(
         "TNT", Colour.ORANGE.withAlpha(0.35f), allowAlpha = true,
         desc = "Block to place TNT on / Superboom."
     )
-    private val secretColour by colourPicker(
-        "Secret target", Colour.RED.withAlpha(0.45f), allowAlpha = true,
-        desc = "The secret itself (interact chest / bat spot / item ground / exit / ...)."
+
+    // Per-secret-type target colours — knowing the type at a glance tells you
+    // what to do (chest → open, bat → wait, item → walk to ground, etc.).
+    private val secretInteractColour by colourPicker(
+        "Secret: interact", Colour.RED.withAlpha(0.45f), allowAlpha = true,
+        desc = "Secret target — interact head."
+    )
+    private val secretBatColour by colourPicker(
+        "Secret: bat", Colour.MAGENTA.withAlpha(0.45f), allowAlpha = true,
+        desc = "Secret target — bat spawn spot."
+    )
+    private val secretItemColour by colourPicker(
+        "Secret: item", Colour.LIME.withAlpha(0.45f), allowAlpha = true,
+        desc = "Secret target — item drop on the floor."
+    )
+    private val secretChestColour by colourPicker(
+        "Secret: chest", Colour.ORANGE.withAlpha(0.55f), allowAlpha = true,
+        desc = "Secret target — chest to open."
+    )
+    private val secretExitColour by colourPicker(
+        "Secret: exit", Colour.PURPLE.withAlpha(0.45f), allowAlpha = true,
+        desc = "Secret target — room exit."
     )
 
     // -- Pre-translated route state ----------------------------------------
@@ -95,8 +131,14 @@ object SecretRoutes : Module(
 
     private data class WorldSecret(val type: SecretType, val pos: BlockPos)
 
-    /** Grouped by secret index so per-secret "closest only" filtering works. */
-    private data class RoutesForSecret(val secretIndex: Int, val alternates: List<WorldRoute>)
+    /** Grouped by secret index so "single nearest secret" + "alternates" filters work. */
+    private data class RoutesForSecret(val secretIndex: Int, val alternates: List<WorldRoute>) {
+        /** Anchor used for "which secret is closest to the player" — prefer the
+         *  secret target itself (the thing you're trying to reach); fall back to
+         *  the first waypoint of any alternate if no secret position is recorded. */
+        val anchor: Vec3? = alternates.firstNotNullOfOrNull { it.secret?.let { s -> Vec3.atCenterOf(s.pos) } }
+            ?: alternates.firstNotNullOfOrNull { it.locations.firstOrNull() }
+    }
 
     private val activeRoutes = CopyOnWriteArrayList<RoutesForSecret>()
 
@@ -113,37 +155,61 @@ object SecretRoutes : Module(
             if (!inDungeons || inBoss) return@on
             if (activeRoutes.isEmpty()) return@on
 
-            val depth = !throughWalls
-            val thickness = lineThickness
             val playerPos = mc.player?.position()
+            val groupsToDraw = if (showAllSecrets || playerPos == null) {
+                activeRoutes
+            } else {
+                listOf(nearestGroup(playerPos) ?: return@on)
+            }
 
-            for (group in activeRoutes) {
-                val routesToDraw = if (showAllRoutes || playerPos == null || group.alternates.size <= 1) {
+            for (group in groupsToDraw) {
+                val routesToDraw = if (showAllAlternates || playerPos == null || group.alternates.size <= 1) {
                     group.alternates
                 } else {
                     listOf(group.alternates.minBy { firstWaypointSqr(it, playerPos) })
                 }
-                for (route in routesToDraw) {
-                    if (route.locations.size >= 2) {
-                        ctx.drawLine(route.locations, lineColour, depth = depth, thickness = thickness)
-                    }
-                    drawBoxes(route.etherwarps, etherwarpColour)
-                    drawBoxes(route.mines, mineColour)
-                    drawBoxes(route.interacts, interactColour)
-                    drawBoxes(route.tnts, tntColour)
-                    route.secret?.let { drawBoxes(listOf(it.pos), secretColour) }
-                }
+                for (route in routesToDraw) drawRoute(route)
             }
         }
+    }
+
+    private fun RenderEvent.World.drawRoute(route: WorldRoute) {
+        val depth = !throughWalls
+
+        if (route.locations.size >= 2) {
+            ctx.drawLine(route.locations, lineColour, depth = depth, thickness = lineThickness)
+        }
+        if (showStartMarker) {
+            val firstBlock = route.locations.firstOrNull()
+            if (firstBlock != null) {
+                val pos = BlockPos(firstBlock.x.toInt(), (firstBlock.y - 0.5).toInt(), firstBlock.z.toInt())
+                ctx.drawWireFrameBox(pos.aabb, startColour, thickness = startThickness, depth = depth)
+            }
+        }
+        drawBoxes(route.etherwarps, etherwarpColour)
+        drawBoxes(route.mines, mineColour)
+        drawBoxes(route.interacts, interactColour)
+        drawBoxes(route.tnts, tntColour)
+        route.secret?.let { drawBoxes(listOf(it.pos), colourForSecret(it.type)) }
     }
 
     private fun RenderEvent.World.drawBoxes(positions: List<BlockPos>, colour: Colour) {
         if (positions.isEmpty()) return
         val depth = !throughWalls
-        for (pos in positions) {
-            ctx.drawFilledBox(pos.aabb, colour, depth = depth)
-        }
+        for (pos in positions) ctx.drawFilledBox(pos.aabb, colour, depth = depth)
     }
+
+    private fun colourForSecret(type: SecretType): Colour = when (type) {
+        SecretType.INTERACT -> secretInteractColour
+        SecretType.BAT      -> secretBatColour
+        SecretType.ITEM     -> secretItemColour
+        SecretType.CHEST    -> secretChestColour
+        SecretType.EXIT     -> secretExitColour
+        SecretType.UNKNOWN  -> secretInteractColour
+    }
+
+    private fun nearestGroup(player: Vec3): RoutesForSecret? =
+        activeRoutes.minByOrNull { it.anchor?.distanceToSqr(player) ?: Double.MAX_VALUE }
 
     private fun firstWaypointSqr(route: WorldRoute, player: Vec3): Double {
         val first = route.locations.firstOrNull() ?: return Double.MAX_VALUE
