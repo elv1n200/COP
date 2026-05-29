@@ -171,8 +171,25 @@ object AutoUpdater : Module(
         CopMod.scope.launch(Dispatchers.IO) {
             try {
                 val update = context.checkUpdate(stream).get()
-                if (update.isUpdateAvailable) handleUpdateAvailable(update)
-                else if (reason == "manual") modMessage("&aAuto Updater: already on the latest version (&f${currentModVersion}&a).")
+                val remoteVersion = update.update.versionName.orEmpty()
+                // libautoupdate's isUpdateAvailable is a plain string inequality
+                // check — fires "update available" any time the remote tag differs,
+                // including when the local build is *ahead* of the latest published
+                // release (which happens any time we're testing a local build before
+                // tagging it). Re-gate on our own component-wise comparison so the
+                // popup only appears for an actually-newer remote.
+                val reallyNewer = update.isUpdateAvailable && isStrictlyNewer(remoteVersion, currentModVersion)
+                if (reallyNewer) {
+                    handleUpdateAvailable(update)
+                } else if (reason == "manual") {
+                    val cmp = compareSemver(remoteVersion, currentModVersion)
+                    val msg = when {
+                        cmp == 0 -> "&aAuto Updater: already on the latest version (&f${currentModVersion}&a)."
+                        cmp < 0  -> "&aAuto Updater: local build (&f${currentModVersion}&a) is ahead of the latest release (&f${remoteVersion}&a)."
+                        else     -> "&aAuto Updater: already on the latest version (&f${currentModVersion}&a)."
+                    }
+                    modMessage(msg)
+                }
             } catch (e: Exception) {
                 CopMod.logger.warn("[AutoUpdater] check failed", e)
                 if (reason == "manual") modMessage("&cAuto Updater: check failed — ${e.message ?: "unknown error"}")
@@ -180,6 +197,42 @@ object AutoUpdater : Module(
                 checkInFlight.set(false)
             }
         }
+    }
+
+    /** Strict component-wise version comparison after stripping a leading 'v'.
+     *  Returns true only if [remote] is unambiguously newer than [local]. If
+     *  either side can't be parsed as a dotted-int version, defaults to false
+     *  (no popup) since a downgrade prompt is worse than a missed update. */
+    private fun isStrictlyNewer(remote: String, local: String): Boolean {
+        val r = parseSemver(remote) ?: return false
+        val l = parseSemver(local) ?: return false
+        return compareLists(r, l) > 0
+    }
+
+    /** Same parse + compare, returning -1/0/1; or 0 if either side won't parse. */
+    private fun compareSemver(a: String, b: String): Int {
+        val pa = parseSemver(a) ?: return 0
+        val pb = parseSemver(b) ?: return 0
+        return compareLists(pa, pb)
+    }
+
+    private fun parseSemver(s: String): List<Int>? {
+        val trimmed = s.trim().removePrefix("v")
+        if (trimmed.isEmpty()) return null
+        val parts = trimmed.split('.').map { chunk ->
+            // Tolerate suffixes like "1.3.2-pre1" → take leading digits only.
+            chunk.takeWhile { it.isDigit() }.toIntOrNull()
+        }
+        return if (parts.any { it == null }) null else parts.filterNotNull()
+    }
+
+    private fun compareLists(a: List<Int>, b: List<Int>): Int {
+        val n = maxOf(a.size, b.size)
+        for (i in 0 until n) {
+            val cmp = a.getOrElse(i) { 0 }.compareTo(b.getOrElse(i) { 0 })
+            if (cmp != 0) return cmp
+        }
+        return 0
     }
 
     private fun handleUpdateAvailable(update: PotentialUpdate) {
