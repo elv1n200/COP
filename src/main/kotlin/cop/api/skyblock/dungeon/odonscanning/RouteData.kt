@@ -63,11 +63,20 @@ object RouteData {
      *  (`Tombstone-2` → 2). `routes` are the alternate paths to that secret. */
     data class RoomSecretRoutes(val secretIndex: Int, val routes: List<Route>)
 
-    private val byRoomName: Map<String, List<RoomSecretRoutes>> by lazy { load() }
+    /** Keyed by [canonicalKey] (lowercase, alphanumeric-only) — the upstream
+     *  route DB uses kebab-case (e.g. `Super-Tall`, `Arrow-Trap`) but COP's
+     *  `odon_rooms.json` uses space-separated or concatenated (e.g. `Supertall`,
+     *  `Arrow Trap`). Stripping all non-alphanumeric + lowercasing both sides
+     *  makes the lookup work without an alias table. */
+    private val byCanonicalName: Map<String, List<RoomSecretRoutes>> by lazy { load() }
 
     operator fun get(roomName: String?): List<RoomSecretRoutes> {
         if (roomName == null) return emptyList()
-        return byRoomName[roomName].orEmpty()
+        return byCanonicalName[canonicalKey(roomName)].orEmpty()
+    }
+
+    private fun canonicalKey(s: String): String = buildString(s.length) {
+        for (c in s) if (c.isLetterOrDigit()) append(c.lowercaseChar())
     }
 
     private fun load(): Map<String, List<RoomSecretRoutes>> {
@@ -95,7 +104,7 @@ object RouteData {
                 val parsed = routesArray.mapNotNull { (it as? JsonObject)?.let(::parseRoute) }
                 if (parsed.isEmpty()) continue
 
-                into.getOrPut(roomName) { mutableMapOf() }
+                into.getOrPut(canonicalKey(roomName)) { mutableMapOf() }
                     .getOrPut(secretIdx) { mutableListOf() }
                     .addAll(parsed)
             }

@@ -166,6 +166,19 @@ object SecretRoutes : Module(
             if (activeRoutes.isEmpty()) return@on
 
             val playerPos = mc.player?.position()
+
+            // Always draw a small target marker for EVERY secret in the room so
+            // the player has spatial awareness of where the goals are — even
+            // when only one route's full path is rendered. Keeps "show only
+            // nearest" usable: you can still see the other 7 secrets without
+            // their lines/waypoints cluttering the view.
+            if (!showAllSecrets) {
+                for (group in activeRoutes) {
+                    val s = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
+                    drawBoxes(listOf(s.pos), colourForSecret(s.type))
+                }
+            }
+
             val groupsToDraw = if (showAllSecrets || playerPos == null) {
                 activeRoutes
             } else {
