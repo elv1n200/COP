@@ -15,9 +15,11 @@ import cop.api.skyblock.dungeon.odonscanning.RouteData.SecretType
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
 import cop.api.skyblock.invoke
 import cop.module.Module
+import cop.utils.ChatUtils.literal
 import cop.utils.aabb
 import cop.utils.render.drawFilledBox
 import cop.utils.render.drawLine
+import cop.utils.render.drawText
 import cop.utils.render.drawWireFrameBox
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -56,6 +58,14 @@ object SecretRoutes : Module(
     private val showStartMarker by switch(
         "Mark start", true,
         desc = "Draw a wireframe box at the first waypoint of each rendered route so you can tell where to begin."
+    )
+    private val showStartLabel by switch(
+        "Label start", true,
+        desc = "Float a \"Start\" text label above the start marker."
+    )
+    private val showWaypointNumbers by switch(
+        "Number waypoints", true,
+        desc = "Show 1, 2, 3, ... above each walking waypoint so the order to follow is obvious."
     )
     private val lineThickness by slider(
         "Line thickness", 3.0f, 0.5f, 10.0f, 0.1f,
@@ -179,11 +189,27 @@ object SecretRoutes : Module(
         if (route.locations.size >= 2) {
             ctx.drawLine(route.locations, lineColour, depth = depth, thickness = lineThickness)
         }
-        if (showStartMarker) {
-            val firstBlock = route.locations.firstOrNull()
-            if (firstBlock != null) {
-                val pos = BlockPos(firstBlock.x.toInt(), (firstBlock.y - 0.5).toInt(), firstBlock.z.toInt())
-                ctx.drawWireFrameBox(pos.aabb, startColour, thickness = startThickness, depth = depth)
+        val firstLoc = route.locations.firstOrNull()
+        if (showStartMarker && firstLoc != null) {
+            val pos = BlockPos(firstLoc.x.toInt(), (firstLoc.y - 0.5).toInt(), firstLoc.z.toInt())
+            ctx.drawWireFrameBox(pos.aabb, startColour, thickness = startThickness, depth = depth)
+        }
+        if (showStartLabel && firstLoc != null) {
+            ctx.drawText(
+                literal("Start").withColor(startColour.rgb),
+                firstLoc.add(0.0, 1.6, 0.0),
+                scale = 1.0f,
+                depth = depth,
+            )
+        }
+        if (showWaypointNumbers) {
+            route.locations.forEachIndexed { idx, loc ->
+                ctx.drawText(
+                    literal((idx + 1).toString()).withColor(lineColour.rgb),
+                    loc.add(0.0, 0.85, 0.0),
+                    scale = 0.8f,
+                    depth = depth,
+                )
             }
         }
         drawBoxes(route.etherwarps, etherwarpColour)
