@@ -206,6 +206,12 @@ object SecretRoutes : Module(
     private const val INTERACT_HIT_RADIUS = 4.0
     private const val ITEM_HIT_RADIUS = 4.0
     private const val BAT_HIT_RADIUS = 8.0
+    /** Proximity radii for the per-frame "player is standing right on the
+     *  secret" fallback. Smaller than the event radii because this is a
+     *  player-position check, not a packet-source-position one. Matches
+     *  yourboykyle's beta3 reference (3 / 2). */
+    private const val BAT_PROXIMITY_RADIUS = 3.0
+    private const val ITEM_PROXIMITY_RADIUS = 2.0
 
     init {
         on<DungeonEvent.Room.Enter> {
@@ -240,7 +246,10 @@ object SecretRoutes : Module(
             // event (e.g. another party member clicked, or we entered the room
             // after they were already gone). Cheap — at most ~8 getBlockState
             // calls per frame.
-            if (autoAdvance) refreshInteractCollected()
+            if (autoAdvance) {
+                refreshInteractCollected()
+                refreshProximityCollected()
+            }
 
             val playerPos = mc.player?.position()
             val visibleGroups = activeRoutes.filter { !it.collected }
@@ -411,6 +420,27 @@ object SecretRoutes : Module(
             if (group.collected || !group.pollableAsHead) continue
             val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
             if (!level.getBlockState(secret.pos).`is`(Blocks.PLAYER_HEAD)) {
+                group.collected = true
+            }
+        }
+    }
+
+    /** Per-frame fallback for BAT/ITEM secrets that the packet-event hooks
+     *  missed (e.g. item velocity pushed it away before pickup, or the bat
+     *  damage sound got dropped). If the player is standing within the
+     *  type-specific proximity radius of an uncollected BAT/ITEM secret,
+     *  mark it collected. Matches yourboykyle beta3's auto-advance fallback. */
+    private fun refreshProximityCollected() {
+        val player = mc.player?.position() ?: return
+        for (group in activeRoutes) {
+            if (group.collected) continue
+            val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
+            val radius = when (secret.type) {
+                SecretType.BAT  -> BAT_PROXIMITY_RADIUS
+                SecretType.ITEM -> ITEM_PROXIMITY_RADIUS
+                else -> continue
+            }
+            if (Vec3.atCenterOf(secret.pos).distanceToSqr(player) <= radius * radius) {
                 group.collected = true
             }
         }
