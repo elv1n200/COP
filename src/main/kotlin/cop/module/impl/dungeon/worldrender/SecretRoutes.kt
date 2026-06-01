@@ -9,6 +9,7 @@ import cop.api.colour.withAlpha
 import cop.api.events.DungeonEvent
 import cop.api.events.RenderEvent
 import cop.api.events.WorldEvent
+import cop.api.input.CatKeys
 import cop.api.skyblock.Island
 import cop.api.skyblock.dungeon.Dungeon.inBoss
 import cop.api.skyblock.dungeon.Dungeon.inDungeons
@@ -58,6 +59,10 @@ object SecretRoutes : Module(
         "Show all secrets", false,
         desc = "On: every secret's route in the room is rendered at once (busy view). Off: only the route to the secret closest to you."
     )
+    private val nextSecretKey = keybind(
+        "Skip current secret", CatKeys.KEY_NONE,
+        desc = "Manually mark the currently-displayed secret as done so the route jumps to the next nearest one. Useful when auto-advance misses (chest secrets, weird lever positions, etc.)."
+    ).onPress { skipCurrentSecret() }.also { register(it) }
     private val showAllAlternates by switch(
         "Show alternates", false,
         desc = "When a secret has multiple known routes, show all of them instead of just the one whose first waypoint is closest to you."
@@ -179,10 +184,18 @@ object SecretRoutes : Module(
         val anchor: Vec3? = alternates.firstNotNullOfOrNull { it.secret?.let { s -> Vec3.atCenterOf(s.pos) } }
             ?: alternates.firstNotNullOfOrNull { it.locations.firstOrNull() }
         /** Flipped to true by auto-advance event hooks (or the per-frame block
-         *  re-check for INTERACT secrets). Once true the group is skipped for
-         *  both "nearest" pick and target-box rendering. @Volatile because the
-         *  event handlers are dispatched on the network thread. */
+         *  re-check for INTERACT-head secrets, or the manual "next" keybind).
+         *  Once true the group is skipped for both "nearest" pick and target-box
+         *  rendering. @Volatile because the event handlers are dispatched on the
+         *  network thread. */
         @Volatile var collected: Boolean = false
+        /** True only if this group's secret target was an actual PLAYER_HEAD
+         *  block at room-enter time. Used to gate the per-frame "block missing
+         *  => collected" check — INTERACT secrets are commonly levers / buttons
+         *  / chests where polling for PLAYER_HEAD absence would mark them
+         *  collected immediately. Set in [onRoomEnter] for INTERACT/UNKNOWN
+         *  types only. */
+        var pollableAsHead: Boolean = false
     }
 
     private val activeRoutes = CopyOnWriteArrayList<RoutesForSecret>()
@@ -386,19 +399,32 @@ object SecretRoutes : Module(
         best?.collected = true
     }
 
-    /** INTERACT secrets that got removed without firing our event (e.g. a
+    /** INTERACT-head secrets that got removed without firing our event (e.g. a
      *  party-mate clicked them) — detect by checking the block at the recorded
-     *  position is no longer a player head. Called once per render frame. */
+     *  position is no longer a player head. Only runs on secrets we *know* were
+     *  PLAYER_HEAD at room-enter (see [RoutesForSecret.pollableAsHead]) —
+     *  otherwise lever / button / chest INTERACT secrets would mark themselves
+     *  collected immediately, since their block isn't a PLAYER_HEAD ever. */
     private fun refreshInteractCollected() {
         val level = mc.level ?: return
         for (group in activeRoutes) {
-            if (group.collected) continue
+            if (group.collected || !group.pollableAsHead) continue
             val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
-            if (secret.type != SecretType.INTERACT && secret.type != SecretType.UNKNOWN) continue
             if (!level.getBlockState(secret.pos).`is`(Blocks.PLAYER_HEAD)) {
                 group.collected = true
             }
         }
+    }
+
+    /** Mark the secret that the route is currently pointing at as collected,
+     *  so the active route hops to the next-nearest uncollected one. Bound to
+     *  the "Skip current secret" keybind. */
+    private fun skipCurrentSecret() {
+        if (activeRoutes.isEmpty()) return
+        val playerPos = mc.player?.position() ?: return
+        val visible = activeRoutes.filter { !it.collected }
+        val target = visible.minByOrNull { it.anchor?.distanceToSqr(playerPos) ?: Double.MAX_VALUE } ?: return
+        target.collected = true
     }
 
     // -- Room enter --------------------------------------------------------
@@ -410,6 +436,7 @@ object SecretRoutes : Module(
         val groups = RouteData[room.name]
         if (groups.isEmpty()) return
 
+        val level = mc.level
         for (group in groups) {
             val translated = group.routes.map { r ->
                 WorldRoute(
@@ -427,7 +454,18 @@ object SecretRoutes : Module(
                     secret = r.secret?.let { WorldSecret(it.type, room.getRealCoords(it.location)) },
                 )
             }
-            activeRoutes += RoutesForSecret(group.secretIndex, translated)
+            val rfs = RoutesForSecret(group.secretIndex, translated)
+            // Snapshot: is this an actual PLAYER_HEAD interact secret? If so,
+            // the per-frame "block missing => collected" poll is safe. If it's
+            // a lever / chest / button INTERACT (or BAT / ITEM / etc.), poll
+            // would falsely auto-collect on first frame.
+            val secret = translated.firstNotNullOfOrNull { it.secret }
+            if (secret != null && (secret.type == SecretType.INTERACT || secret.type == SecretType.UNKNOWN) &&
+                level?.getBlockState(secret.pos)?.`is`(Blocks.PLAYER_HEAD) == true
+            ) {
+                rfs.pollableAsHead = true
+            }
+            activeRoutes += rfs
         }
     }
 }
