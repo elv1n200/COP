@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] — 2026-05-29
+
+### Fixed
+- **Secret Routes Auto-advance**: die aktive Route ist beim näher-Kommen sofort verschwunden, weil der pro-Frame Block-Check angenommen hat, dass jedes INTERACT-Secret ein `PLAYER_HEAD` ist — Levers, Buttons, Chests etc. wurden dann instant als "collected" markiert sobald man in deren Render-Distanz kam. Jetzt wird beim Room-Enter geprüft, ob das Block tatsächlich ein Player-Head ist, und nur dann gepollt (`pollableAsHead`-Flag pro Group). Lever / Chest / Button INTERACT-Secrets werden nur noch via Event oder den neuen Manual-Skip-Keybind als done markiert.
+
+### Added
+- **Secret Routes — "Skip current secret" Keybind**: per-Tastendruck das gerade angezeigte Secret als done markieren um zur nächsten Route zu springen. Fallback wenn die Event-basierte Auto-Advance ein Secret verfehlt (Chest-Secrets, ungewöhnliche Lever-Positionen, Party-Mate-Klicks die wir nicht mitbekommen haben). Default unbinded — selbst im Module-Menü setzen.
+
 ## [1.3.3] — 2026-05-29
 
 ### Added
