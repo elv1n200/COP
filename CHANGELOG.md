@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] — 2026-06-02
+
+### Added
+- **Secret Routes — Proximity-Auto-Advance für BAT / ITEM Secrets**: zusätzlich zu den Packet-Events (Bat-Damage-Sound, Item-Pickup-Packet) wird pro Frame geprüft ob der Spieler innerhalb von 3 Blöcken eines BAT-Secrets oder 2 Blöcken eines ITEM-Secrets steht — fängt die Fälle ab wo das Packet aus irgendeinem Grund nicht ankommt (Bat-Sound gedropt, Item-Velocity schiebt es weg bevor Pickup, etc.). Matched yourboykyle beta3's Fallback-Verhalten.
+
+### Notes (vs upstream beta3)
+- **Shader-Kompatibilität**: Upstream beta3 rendert Lines + Wireframe-Boxen als billboarded Quads damit sie mit Iris/Sodium funktionieren. COPs `drawLine` / `drawWireFrameBox` nutzen noch GL Line Primitives die von Shader-Packs nicht gerendert werden — als Folge sind unsere Secret-Route-Linien, DungeonESP-Wireframes, Solver-Linien etc. mit Shadern unsichtbar. Fix benötigt ein Refactor des `WorldRenderContextUtils` (project-wide, nicht nur SecretRoutes). Als separate Task gespawnt.
+- **Updated pearl routes / fixed text rendering** aus dem beta3-Changelog: bei uns nicht relevant — pearlroutes.json ist byte-identisch zum upstream main, und unser `drawText` nutzt schon `Font.DisplayMode.SEE_THROUGH` vs `NORMAL` analog zu deren Fix.
+
 ## [1.3.4] — 2026-05-29
 
 ### Fixed
