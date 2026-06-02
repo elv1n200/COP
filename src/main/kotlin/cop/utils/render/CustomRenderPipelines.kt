@@ -8,34 +8,34 @@ import com.mojang.blaze3d.vertex.VertexFormat
 import net.minecraft.client.renderer.RenderPipelines
 
 /**
- * from OdinFabric (BSD 3-Clause)
- * copyright (c) 2025-2026 odtheking
- * original: https://github.com/odtheking/OdinFabric/blob/main/src/main/kotlin/com/odtheking/odin/utils/render/CustomRenderPipelines.kt
+ * Lines and wireframes are rendered as camera-facing quads (not GL_LINES) so
+ * that Iris/Sodium shader packs actually pick them up — those backends drop
+ * line primitives. The `BILLBOARD_LINE_QUAD` pipelines pair with
+ * `POSITION_COLOR` + `QUADS` since the emitter side already does the
+ * cross-product math to orient the quad. See
+ * `WorldRenderContextUtils.billboardLineQuad` for the geometry.
  *
- * The vertex format on the LINE_* pipelines is intentionally **not** overridden.
- * 1.21.11 introduced `POSITION_COLOR_NORMAL_LINE_WIDTH` and the per-vertex
- * `setLineWidth()` shader path, while 1.21.10 still uses `POSITION_COLOR_NORMAL`.
- * `LINES_SNIPPET` already wires the right format for whichever version we're
- * compiled against, so leaving the format unset prevents the snippet's choice
- * from being clobbered.
+ * `TRIANGLE_STRIP*` is unchanged and still serves the filled-box path; it was
+ * already shader-friendly.
  */
 object CustomRenderPipelines {
 
-    val LINE_LIST: RenderPipeline = RenderPipelines.register(
-        RenderPipeline.builder(*arrayOf<RenderPipeline.Snippet>(RenderPipelines.LINES_SNIPPET))
-            .withLocation("cop/pipeline/lines")
+    val BILLBOARD_LINE_QUAD: RenderPipeline = RenderPipelines.register(
+        RenderPipeline.builder(*arrayOf<RenderPipeline.Snippet>(RenderPipelines.DEBUG_FILLED_SNIPPET))
+            .withLocation("cop/pipeline/billboard_line_quad")
             .withCull(false)
+            .withVertexFormat(DefaultVertexFormat.POSITION_COLOR, VertexFormat.Mode.QUADS)
             .withBlend(BlendFunction.TRANSLUCENT)
             .withDepthWrite(true)
             .withDepthTestFunction(DepthTestFunction.LEQUAL_DEPTH_TEST)
             .build()
     )
 
-    val LINE_LIST_ESP: RenderPipeline = RenderPipelines.register(
-        RenderPipeline.builder(*arrayOf<RenderPipeline.Snippet>(RenderPipelines.LINES_SNIPPET))
-            .withLocation("cop/pipeline/lines_esp")
-            .withShaderDefine("shad")
+    val BILLBOARD_LINE_QUAD_ESP: RenderPipeline = RenderPipelines.register(
+        RenderPipeline.builder(*arrayOf<RenderPipeline.Snippet>(RenderPipelines.DEBUG_FILLED_SNIPPET))
+            .withLocation("cop/pipeline/billboard_line_quad_esp")
             .withCull(false)
+            .withVertexFormat(DefaultVertexFormat.POSITION_COLOR, VertexFormat.Mode.QUADS)
             .withBlend(BlendFunction.TRANSLUCENT)
             .withDepthWrite(false)
             .withDepthTestFunction(DepthTestFunction.NO_DEPTH_TEST)

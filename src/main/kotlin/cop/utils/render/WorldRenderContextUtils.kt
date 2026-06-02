@@ -5,7 +5,6 @@ import cop.api.colour.*
 import cop.mixins.accessors.CameraAccessor
 import cop.utils.EntityUtils.renderPos
 import cop.utils.unaryMinus
-import com.mojang.blaze3d.systems.RenderSystem
 import com.mojang.blaze3d.vertex.ByteBufferBuilder
 import com.mojang.blaze3d.vertex.PoseStack
 import com.mojang.blaze3d.vertex.VertexConsumer
@@ -16,19 +15,18 @@ import net.minecraft.client.renderer.MultiBufferSource
 import net.minecraft.network.chat.Component
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
-import kotlin.math.pow
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * from OdinFabric (BSD 3-Clause)
- * copyright (c) 2025-2026 odtheking
- * original: no longer exists, fuck off
+ * World-render helpers. Lines and wireframes are emitted as camera-facing
+ * quads (see [billboardLineQuad]) rather than GL line primitives — Iris/Sodium
+ * shader packs drop line primitives, so the previous GL_LINES path was
+ * invisible under shaders. Filled boxes still use the existing triangle-strip
+ * path which is already shader-friendly.
  *
- * The vertex helpers below replace `ShapeRenderer.renderVector` /
- * `renderLineBox` / `addChainedFilledBoxVertices` which were removed in
- * 1.21.11 alongside the `RenderSystem.lineWidth` migration to per-vertex
- * `setLineWidth`. Writing them out by hand keeps a single source path that
- * compiles for both 1.21.10 and 1.21.11.
+ * Inspired by yourboykyle's Secret Routes Mod (GPL-3), `AnotherRenderingUtil`.
  */
 private val ALLOCATOR = ByteBufferBuilder(1536)
 
@@ -39,52 +37,72 @@ private fun camera() = mc.gameRenderer.mainCamera
 private val net.minecraft.client.Camera.pos: Vec3
     get() = (this as CameraAccessor).position
 
-/** Emits two line vertices with the given colour. */
-private fun PoseStack.Pose.lineVertex(
+/**
+ * Pixel-thickness → world-thickness factor. The public `thickness` argument is
+ * pixel-style (matching the old GL_LINES path) and gets multiplied by this
+ * constant to get a world-space line width. Tuned to roughly match the
+ * previous visual weight at typical viewing distances.
+ */
+private const val THICKNESS_MULTIPLIER = 0.01f
+
+/** Minimum world-space half-width so degenerate-thin lines remain visible. */
+private const val MIN_HALF_WIDTH = 0.001f
+
+/**
+ * Emit one camera-facing quad for a line segment. Vertices are in world
+ * coordinates — caller's PoseStack must already be translated by `-camera.pos`.
+ *
+ * The quad's width direction is `lineDir × (start - camera)`, which is
+ * perpendicular to both the line and the viewing direction so the quad always
+ * faces the camera.
+ */
+private fun PoseStack.Pose.billboardLineQuad(
     buffer: VertexConsumer,
-    x1: Float, y1: Float, z1: Float,
-    x2: Float, y2: Float, z2: Float,
+    sx: Float, sy: Float, sz: Float,
+    ex: Float, ey: Float, ez: Float,
+    cx: Float, cy: Float, cz: Float,
     colour: Int,
-    width: Float,
+    halfWidth: Float,
 ) {
-    val dx = x2 - x1; val dy = y2 - y1; val dz = z2 - z1
-    val len = sqrt(dx * dx + dy * dy + dz * dz)
-    val nx = if (len > 0) dx / len else 0f
-    val ny = if (len > 0) dy / len else 0f
-    val nz = if (len > 0) dz / len else 0f
-    // `setLineWidth` only exists on 1.21.11+; on 1.21.10 line width is a
-    // global GL state set via `RenderSystem.lineWidth()` before the draw call.
-    buffer.addVertex(this, x1, y1, z1).setColor(colour).setNormal(this, nx, ny, nz)
-        //? if >= 1.21.11
-        /*.setLineWidth(width)*/
-    buffer.addVertex(this, x2, y2, z2).setColor(colour).setNormal(this, nx, ny, nz)
-        //? if >= 1.21.11
-        /*.setLineWidth(width)*/
-}
+    val lineDx = ex - sx
+    val lineDy = ey - sy
+    val lineDz = ez - sz
+    val lineLenSq = lineDx * lineDx + lineDy * lineDy + lineDz * lineDz
+    if (lineLenSq < 1e-10f) return
+    val invLineLen = 1f / sqrt(lineLenSq)
+    val lnx = lineDx * invLineLen
+    val lny = lineDy * invLineLen
+    val lnz = lineDz * invLineLen
 
-/** Suppress the now-unused [width] warning on 1.21.10 — referenced only above. */
-@Suppress("unused")
-private val widthIsUsedOn1_21_11 = Unit
+    var camDx = sx - cx
+    var camDy = sy - cy
+    var camDz = sz - cz
+    val camLenSq = camDx * camDx + camDy * camDy + camDz * camDz
+    if (camLenSq < 1e-6f) {
+        camDx = 0f; camDy = 1f; camDz = 0f
+    } else {
+        val invCamLen = 1f / sqrt(camLenSq)
+        camDx *= invCamLen; camDy *= invCamLen; camDz *= invCamLen
+    }
 
-/** Wireframe box — 12 edges, 24 vertices. */
-private fun PoseStack.Pose.lineBox(buffer: VertexConsumer, box: AABB, colour: Int, width: Float) {
-    val x1 = box.minX.toFloat(); val y1 = box.minY.toFloat(); val z1 = box.minZ.toFloat()
-    val x2 = box.maxX.toFloat(); val y2 = box.maxY.toFloat(); val z2 = box.maxZ.toFloat()
-    // bottom rectangle
-    lineVertex(buffer, x1, y1, z1, x2, y1, z1, colour, width)
-    lineVertex(buffer, x2, y1, z1, x2, y1, z2, colour, width)
-    lineVertex(buffer, x2, y1, z2, x1, y1, z2, colour, width)
-    lineVertex(buffer, x1, y1, z2, x1, y1, z1, colour, width)
-    // top rectangle
-    lineVertex(buffer, x1, y2, z1, x2, y2, z1, colour, width)
-    lineVertex(buffer, x2, y2, z1, x2, y2, z2, colour, width)
-    lineVertex(buffer, x2, y2, z2, x1, y2, z2, colour, width)
-    lineVertex(buffer, x1, y2, z2, x1, y2, z1, colour, width)
-    // pillars
-    lineVertex(buffer, x1, y1, z1, x1, y2, z1, colour, width)
-    lineVertex(buffer, x2, y1, z1, x2, y2, z1, colour, width)
-    lineVertex(buffer, x2, y1, z2, x2, y2, z2, colour, width)
-    lineVertex(buffer, x1, y1, z2, x1, y2, z2, colour, width)
+    var wx = lny * camDz - lnz * camDy
+    var wy = lnz * camDx - lnx * camDz
+    var wz = lnx * camDy - lny * camDx
+    val wLenSq = wx * wx + wy * wy + wz * wz
+    if (wLenSq < 1e-6f) {
+        // Line aimed straight at/away from the camera: pick any perpendicular.
+        if (abs(lnx) > 0.9f) { wx = 0f; wy = 1f; wz = 0f }
+        else { wx = 1f; wy = 0f; wz = 0f }
+    } else {
+        val invWLen = 1f / sqrt(wLenSq)
+        wx *= invWLen; wy *= invWLen; wz *= invWLen
+    }
+    wx *= halfWidth; wy *= halfWidth; wz *= halfWidth
+
+    buffer.addVertex(this, sx - wx, sy - wy, sz - wz).setColor(colour)
+    buffer.addVertex(this, sx + wx, sy + wy, sz + wz).setColor(colour)
+    buffer.addVertex(this, ex + wx, ey + wy, ez + wz).setColor(colour)
+    buffer.addVertex(this, ex - wx, ey - wy, ez - wz).setColor(colour)
 }
 
 /** Filled box as triangle-strip — 14 vertices (degenerate-tri terminated strip). */
@@ -104,34 +122,33 @@ private fun PoseStack.Pose.filledBoxStrip(buffer: VertexConsumer, box: AABB, col
     for (p in v) buffer.addVertex(this, p[0], p[1], p[2]).setColor(colour)
 }
 
-// Shorthand: `RenderSystem.lineWidth` is gone in 1.21.11. Wrap the call so we
-// can no-op on the new version where line width is set per-vertex above.
-@Suppress("DEPRECATION")
-private fun setLineWidthIfSupported(width: Float) {
-    //? if <= 1.21.10 {
-    RenderSystem.lineWidth(width)
-    //?}
-}
+private fun halfWidthOf(thickness: Float): Float =
+    max(MIN_HALF_WIDTH, thickness * THICKNESS_MULTIPLIER * 0.5f)
 
 fun WorldRenderContext.drawLine(points: Collection<Vec3>, colour: Colour, depth: Boolean, thickness: Float = 3f) {
     if (points.size < 2) return
     val matrix = matrices() ?: return
     val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
-    val layer = if (depth) CustomRenderLayer.LINE_LIST else CustomRenderLayer.LINE_LIST_ESP
-    setLineWidthIfSupported(thickness)
+    val layer = if (depth) CustomRenderLayer.BILLBOARD_LINE_QUAD else CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP
+    val cam = camera().pos
+    val halfWidth = halfWidthOf(thickness)
 
     matrix.pushPose()
-    with(camera().pos) { matrix.translate(-x, -y, -z) }
+    matrix.translate(-cam.x, -cam.y, -cam.z)
 
     val pose = matrix.last()
     val buffer = bufferSource.getBuffer(layer)
+    val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
+    val rgb = colour.rgb
     val pointList = points.toList()
     for (i in 0 until pointList.size - 1) {
-        val s = pointList[i]
-        val e = pointList[i + 1]
-        pose.lineVertex(buffer, s.x.toFloat(), s.y.toFloat(), s.z.toFloat(),
-                                e.x.toFloat(), e.y.toFloat(), e.z.toFloat(),
-                                colour.rgb, thickness)
+        val s = pointList[i]; val e = pointList[i + 1]
+        pose.billboardLineQuad(
+            buffer,
+            s.x.toFloat(), s.y.toFloat(), s.z.toFloat(),
+            e.x.toFloat(), e.y.toFloat(), e.z.toFloat(),
+            cx, cy, cz, rgb, halfWidth,
+        )
     }
 
     matrix.popPose()
@@ -148,14 +165,36 @@ fun WorldRenderContext.drawTracer(to: Vec3, colour: Colour, thickness: Float = 6
 fun WorldRenderContext.drawWireFrameBox(aabb: AABB, colour: Colour, thickness: Float = 6f, depth: Boolean = false) {
     val matrix = matrices() ?: return
     val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
-    val layer = if (depth) CustomRenderLayer.LINE_LIST else CustomRenderLayer.LINE_LIST_ESP
-    val camera = camera() ?: return
-    val width = (thickness / camera.pos.distanceToSqr(aabb.center).pow(0.15)).toFloat()
-    setLineWidthIfSupported(width)
+    val layer = if (depth) CustomRenderLayer.BILLBOARD_LINE_QUAD else CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP
+    val cam = camera().pos
+    val halfWidth = halfWidthOf(thickness)
 
     matrix.pushPose()
-    with(camera.pos) { matrix.translate(-x, -y, -z) }
-    matrix.last().lineBox(bufferSource.getBuffer(layer), aabb, colour.rgb, width)
+    matrix.translate(-cam.x, -cam.y, -cam.z)
+
+    val pose = matrix.last()
+    val buffer = bufferSource.getBuffer(layer)
+    val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
+    val x1 = aabb.minX.toFloat(); val y1 = aabb.minY.toFloat(); val z1 = aabb.minZ.toFloat()
+    val x2 = aabb.maxX.toFloat(); val y2 = aabb.maxY.toFloat(); val z2 = aabb.maxZ.toFloat()
+    val rgb = colour.rgb
+
+    // bottom rectangle
+    pose.billboardLineQuad(buffer, x1, y1, z1, x2, y1, z1, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x2, y1, z1, x2, y1, z2, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x2, y1, z2, x1, y1, z2, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x1, y1, z2, x1, y1, z1, cx, cy, cz, rgb, halfWidth)
+    // top rectangle
+    pose.billboardLineQuad(buffer, x1, y2, z1, x2, y2, z1, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x2, y2, z1, x2, y2, z2, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x2, y2, z2, x1, y2, z2, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x1, y2, z2, x1, y2, z1, cx, cy, cz, rgb, halfWidth)
+    // pillars
+    pose.billboardLineQuad(buffer, x1, y1, z1, x1, y2, z1, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x2, y1, z1, x2, y2, z1, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x2, y1, z2, x2, y2, z2, cx, cy, cz, rgb, halfWidth)
+    pose.billboardLineQuad(buffer, x1, y1, z2, x1, y2, z2, cx, cy, cz, rgb, halfWidth)
+
     matrix.popPose()
     bufferSource.endBatch(layer)
 }
@@ -234,33 +273,37 @@ fun WorldRenderContext.drawCylinder(
 ) {
     val matrix = matrices() ?: return
     val bufferSource = consumers() as? MultiBufferSource.BufferSource ?: return
-    val layer = if (depth) CustomRenderLayer.LINE_LIST else CustomRenderLayer.LINE_LIST_ESP
-    val camera = camera()?.pos ?: return
+    val layer = if (depth) CustomRenderLayer.BILLBOARD_LINE_QUAD else CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP
+    val cam = camera().pos
+    val halfWidth = halfWidthOf(thickness)
 
     matrix.pushPose()
-    matrix.translate(center.x - camera.x, center.y - camera.y, center.z - camera.z)
-    val width = (thickness / camera.distanceToSqr(center).pow(0.15)).toFloat()
-    setLineWidthIfSupported(width)
+    matrix.translate(-cam.x, -cam.y, -cam.z)
+
+    val pose = matrix.last()
+    val buffer = bufferSource.getBuffer(layer)
+    val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
+    val centerX = center.x.toFloat()
+    val centerY = center.y.toFloat()
+    val centerZ = center.z.toFloat()
+    val topY = centerY + height
+    val rgb = colour.rgb
 
     val angleStep = 2.0 * Math.PI / segments
-    val buffer = bufferSource.getBuffer(layer)
-    val pose = matrix.last()
-
     for (i in 0 until segments) {
-        val angle1 = i * angleStep
-        val angle2 = (i + 1) * angleStep
-
-        val x1 = (radius * kotlin.math.cos(angle1)).toFloat()
-        val z1 = (radius * kotlin.math.sin(angle1)).toFloat()
-        val x2 = (radius * kotlin.math.cos(angle2)).toFloat()
-        val z2 = (radius * kotlin.math.sin(angle2)).toFloat()
+        val a1 = i * angleStep
+        val a2 = (i + 1) * angleStep
+        val x1 = centerX + (radius * kotlin.math.cos(a1)).toFloat()
+        val z1 = centerZ + (radius * kotlin.math.sin(a1)).toFloat()
+        val x2 = centerX + (radius * kotlin.math.cos(a2)).toFloat()
+        val z2 = centerZ + (radius * kotlin.math.sin(a2)).toFloat()
 
         // top ring edge, bottom ring edge, vertical pillar
-        pose.lineVertex(buffer, x1, height, z1, x2, height, z2, colour.rgb, width)
-        pose.lineVertex(buffer, x1,     0f, z1, x2,     0f, z2, colour.rgb, width)
-        pose.lineVertex(buffer, x1,     0f, z1, x1, height, z1, colour.rgb, width)
+        pose.billboardLineQuad(buffer, x1,    topY, z1, x2,    topY, z2, cx, cy, cz, rgb, halfWidth)
+        pose.billboardLineQuad(buffer, x1, centerY, z1, x2, centerY, z2, cx, cy, cz, rgb, halfWidth)
+        pose.billboardLineQuad(buffer, x1, centerY, z1, x1,    topY, z1, cx, cy, cz, rgb, halfWidth)
     }
 
     matrix.popPose()
-    bufferSource.endBatch()
+    bufferSource.endBatch(layer)
 }
