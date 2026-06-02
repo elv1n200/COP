@@ -7,10 +7,6 @@ import net.minecraft.client.renderer.rendertype.LayeringTransform
 *///?}
 
 /**
- * from OdinFabric (BSD 3-Clause)
- * copyright (c) 2025-2026 odtheking
- * original: https://github.com/odtheking/OdinFabric/blob/main/src/main/kotlin/com/odtheking/odin/utils/render/CustomRenderLayer.kt
- *
  * 1.21.11 redesigned `RenderType.create` — instead of `(name, bufferSize,
  * affectsCrumbling, sortOnUpload, pipeline, compositeState)` it now takes
  * `(name, RenderSetup)` where the setup is built via `RenderSetup.builder(pipeline)`.
@@ -20,39 +16,39 @@ import net.minecraft.client.renderer.rendertype.LayeringTransform
  */
 object CustomRenderLayer {
 
-    val LINE_LIST: RenderType =
+    val BILLBOARD_LINE_QUAD: RenderType =
         //? if >= 1.21.11 {
         /*RenderType.create(
-            "line-list",
-            RenderSetup.builder(CustomRenderPipelines.LINE_LIST)
+            "billboard-line-quad",
+            RenderSetup.builder(CustomRenderPipelines.BILLBOARD_LINE_QUAD)
                 .bufferSize(RenderType.TRANSIENT_BUFFER_SIZE)
                 .setLayeringTransform(LayeringTransform.VIEW_OFFSET_Z_LAYERING)
                 .createRenderSetup()
         )
         *///? } else {
         RenderType.create(
-            "line-list",
+            "billboard-line-quad",
             RenderType.TRANSIENT_BUFFER_SIZE,
-            CustomRenderPipelines.LINE_LIST,
+            CustomRenderPipelines.BILLBOARD_LINE_QUAD,
             RenderType.CompositeState.builder()
                 .setLayeringState(RenderType.VIEW_OFFSET_Z_LAYERING)
                 .createCompositeState(false)
         )
         //? }
 
-    val LINE_LIST_ESP: RenderType =
+    val BILLBOARD_LINE_QUAD_ESP: RenderType =
         //? if >= 1.21.11 {
         /*RenderType.create(
-            "line-list-esp",
-            RenderSetup.builder(CustomRenderPipelines.LINE_LIST_ESP)
+            "billboard-line-quad-esp",
+            RenderSetup.builder(CustomRenderPipelines.BILLBOARD_LINE_QUAD_ESP)
                 .bufferSize(RenderType.TRANSIENT_BUFFER_SIZE)
                 .createRenderSetup()
         )
         *///? } else {
         RenderType.create(
-            "line-list-esp",
+            "billboard-line-quad-esp",
             RenderType.TRANSIENT_BUFFER_SIZE,
-            CustomRenderPipelines.LINE_LIST_ESP,
+            CustomRenderPipelines.BILLBOARD_LINE_QUAD_ESP,
             RenderType.CompositeState.builder().createCompositeState(false)
         )
         //? }

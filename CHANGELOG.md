@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-06-02
+
+### Changed
+- **World-render Lines & Wireframes — Shader-Pack-Kompatibilität (Iris/Sodium)**: `drawLine`, `drawWireFrameBox` und `drawCylinder` rendern nicht mehr via GL_LINES sondern als kamerafacing Billboard-Quads. GL Line Primitives werden von Iris/Sodium aussortiert/gar nicht gerendert, daher waren mit Shadern bisher *alle* unsere Welt-Linien und Wireframe-Boxen unsichtbar — Secret-Routes-Linien, DungeonESP-Wireframes, PuzzleSolver-Linien, NameTag-Tracers, Etherwarp-Outline, ArrowAlign-Hitboxes, NecronPlatformHighlight, FullBlockHitboxes, M7Relics, DoorKeys, MaxorsCrystals, AutoCroesus-Highlight, FuckDiorite, TerminalWaypoints uvm. Die ~20 Module die diese Utils nutzen funktionieren jetzt mit Shader-Packs.
+  - Implementierung: Pro Liniensegment wird der Cross-Product aus `lineDir × (segmentStart - camera)` als "Width"-Vektor genommen → 4-Vertex-Quad das immer zur Kamera schaut. Wireframes sind 12 solcher Quads (ein Quad pro Würfelkante). Filled Boxes blieben unverändert (waren schon shader-friendly via `TRIANGLE_STRIP`).
+  - Neue Render-Layer `BILLBOARD_LINE_QUAD` (+ `_ESP` für depth-off) ersetzen die alten `LINE_LIST`-Layer. Vertex-Format `POSITION_COLOR` mit `QUADS` Draw-Mode.
+  - Inspiriert von yourboykyle's Secret Routes Mod beta3 (`AnotherRenderingUtil`, GPL-3).
+
 ## [1.3.5] — 2026-06-02
 
 ### Added
