@@ -65,7 +65,7 @@ object SecretRoutes : Module(
     ).onPress { skipCurrentSecret() }.also { register(it) }
     private val showAllAlternates by switch(
         "Show alternates", false,
-        desc = "When a secret has multiple known routes, show all of them instead of just the one whose first waypoint is closest to you."
+        desc = "When a secret has multiple known routes, show all of them instead of a single fixed pick (always the first alternate in the DB)."
     )
     private val autoAdvance by switch(
         "Auto-advance", true,
@@ -296,10 +296,15 @@ object SecretRoutes : Module(
             }
 
             for (group in groupsToDraw) {
-                val routesToDraw = if (showAllAlternates || playerPos == null || group.alternates.size <= 1) {
+                // Pick a deterministic alternate (`alternates[0]`) so the
+                // rendered route — and especially its Start marker — stays
+                // fixed as the player walks around. Previously we picked the
+                // alternate whose first waypoint was closest to the player,
+                // which made the route flip-flop and the Start box jump.
+                val routesToDraw = if (showAllAlternates) {
                     group.alternates
                 } else {
-                    listOf(group.alternates.minBy { firstWaypointSqr(it, playerPos) })
+                    listOfNotNull(group.alternates.firstOrNull())
                 }
                 for (route in routesToDraw) drawRoute(route)
             }
@@ -402,11 +407,6 @@ object SecretRoutes : Module(
         SecretType.CHEST    -> secretChestColour
         SecretType.EXIT     -> secretExitColour
         SecretType.UNKNOWN  -> secretInteractColour
-    }
-
-    private fun firstWaypointSqr(route: WorldRoute, player: Vec3): Double {
-        val first = route.locations.firstOrNull() ?: return Double.MAX_VALUE
-        return first.distanceToSqr(player)
     }
 
     // -- Auto-advance plumbing ---------------------------------------------

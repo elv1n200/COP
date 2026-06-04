@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] — 2026-06-04
+
+### Fixed
+- **Secret Routes — fixer Route-Start statt position-abhängig**: wenn ein Secret mehrere Alternativ-Routen in der DB hat, wurde bisher pro Frame die Alternative gewählt deren erster Waypoint am nächsten zum Spieler war. Beim Laufen flippte die gerenderte Route hin und her und die grüne "Start"-Box sprang mit. Jetzt wird deterministisch `alternates[0]` gepickt — eine feste Route + festes Start, ändert sich nicht beim Bewegen. "Show alternates" zeigt weiterhin alle wenn gewünscht.
+
 ## [1.4.1] — 2026-06-02
 
 ### Added
