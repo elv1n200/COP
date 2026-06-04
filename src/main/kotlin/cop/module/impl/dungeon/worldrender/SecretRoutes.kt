@@ -200,6 +200,25 @@ object SecretRoutes : Module(
 
     private val activeRoutes = CopyOnWriteArrayList<RoutesForSecret>()
 
+    /** Persistent across the current dungeon run: `(roomName, secretIndex)` of
+     *  every secret we marked collected via a *genuine completion signal*
+     *  (Secret.Interact / Secret.Item / Secret.Bat events, the INTERACT-head
+     *  block poll, or the BAT/ITEM proximity poll). Re-entering the same room
+     *  later in the run rebuilds [activeRoutes] but immediately re-marks any
+     *  group whose key appears here, so the already-done secrets stay hidden.
+     *
+     *  Manual skip-keybind completions are intentionally *not* persisted — the
+     *  user might want to come back and see that route later in the run. The
+     *  set is cleared on [WorldEvent.Change] (entering / leaving the dungeon
+     *  is a world swap, so a fresh dungeon run starts with an empty set). */
+    private val completedSecrets = java.util.concurrent.ConcurrentHashMap.newKeySet<Pair<String, Int>>()
+
+    /** Tracked separately from [Dungeon.currentRoom] because we want the name
+     *  the *routes were loaded under* (which we already canonicalised against
+     *  the route DB), so the persistence key matches what gets re-checked on
+     *  room re-enter. */
+    @Volatile private var currentRoomName: String? = null
+
     /** Auto-advance hit radii — how close an event's position must be to a
      *  recorded secret to count as "this is the one that fired". Bats need a
      *  larger window since they fly around before being killed. */
@@ -220,6 +239,10 @@ object SecretRoutes : Module(
 
         on<WorldEvent.Change> {
             activeRoutes.clear()
+            currentRoomName = null
+            // New dungeon run / lobby exit — wipe the per-run completed log
+            // so we start fresh next dungeon.
+            completedSecrets.clear()
         }
 
         // Auto-advance hooks --------------------------------------------------
@@ -405,7 +428,18 @@ object SecretRoutes : Module(
                 best = group
             }
         }
-        best?.collected = true
+        best?.let { markGroupCompleted(it) }
+    }
+
+    /** Marks a group collected AND remembers it in [completedSecrets] so the
+     *  route stays hidden if the player re-enters the room later in the run.
+     *  Use only for genuine completion signals (events / proximity / head poll);
+     *  the manual skip keybind should write [RoutesForSecret.collected] directly
+     *  so it doesn't persist across re-entries. */
+    private fun markGroupCompleted(group: RoutesForSecret) {
+        group.collected = true
+        val room = currentRoomName ?: return
+        completedSecrets += room to group.secretIndex
     }
 
     /** INTERACT-head secrets that got removed without firing our event (e.g. a
@@ -420,7 +454,7 @@ object SecretRoutes : Module(
             if (group.collected || !group.pollableAsHead) continue
             val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
             if (!level.getBlockState(secret.pos).`is`(Blocks.PLAYER_HEAD)) {
-                group.collected = true
+                markGroupCompleted(group)
             }
         }
     }
@@ -441,7 +475,7 @@ object SecretRoutes : Module(
                 else -> continue
             }
             if (Vec3.atCenterOf(secret.pos).distanceToSqr(player) <= radius * radius) {
-                group.collected = true
+                markGroupCompleted(group)
             }
         }
     }
@@ -461,12 +495,14 @@ object SecretRoutes : Module(
 
     private fun onRoomEnter(room: OdonRoom?) {
         activeRoutes.clear()
+        currentRoomName = room?.name
         if (room == null) return
 
         val groups = RouteData[room.name]
         if (groups.isEmpty()) return
 
         val level = mc.level
+        val roomName = room.name
         for (group in groups) {
             val translated = group.routes.map { r ->
                 WorldRoute(
@@ -494,6 +530,12 @@ object SecretRoutes : Module(
                 level?.getBlockState(secret.pos)?.`is`(Blocks.PLAYER_HEAD) == true
             ) {
                 rfs.pollableAsHead = true
+            }
+            // Re-apply per-run completion state: if this secret was already
+            // collected earlier in the run (then we left + re-entered the room),
+            // mark it collected again so the route stays hidden.
+            if (roomName to group.secretIndex in completedSecrets) {
+                rfs.collected = true
             }
             activeRoutes += rfs
         }
