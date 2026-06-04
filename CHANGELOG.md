@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-06-02
+
+### Added
+- **Secret Routes — Per-Run-Persistenz für completed Secrets**: einmal abgeräumte Secrets bleiben für den Rest des Runs versteckt, auch wenn du den Raum verlässt und wieder reinkommst. Implementiert als `Set<(roomName, secretIndex)>` der bei `WorldEvent.Change` geleert wird (= entering/leaving Dungeon ist ein World-Swap → neuer Run startet sauber). Wird *nur* gefüllt wenn das Secret durch ein echtes Completion-Signal markiert wurde (`DungeonEvent.Secret.{Interact,Item,Bat}` Events, der INTERACT-Head Block-Poll, oder der BAT/ITEM Proximity-Check). Manueller "Skip current secret"-Keybind ist absichtlich *nicht* persistent — der ist nur Show-mir-jetzt-die-nächste, du könntest später zurück wollen.
+
 ## [1.4.0] — 2026-06-02
 
 ### Changed
