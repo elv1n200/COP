@@ -15,18 +15,32 @@ import cop.CopMod.logger
  * (see `CREDITS.md`). The bundled JSON keeps its original `#origin` /
  * `#copyright` keys, which the parser skips.
  *
- * Schema (per top-level key, e.g. `"Tombstone-2"`):
- *   - Key  is `"<RoomName>-<SecretIndex>"`. Multiple routes can share a key —
- *     each entry in the value array is one alternate path to the same secret.
- *   - Value is an array of [Route] objects, each containing:
- *     - `locations`     — list of walk waypoints
- *     - `etherwarps`    — list of blocks to etherwarp to
- *     - `mines`         — list of blocks to mine
- *     - `interacts`     — list of blocks to right-click (lever, button, etc.)
- *     - `tnts`          — list of blocks to place TNT on
- *     - `enderpearls`   — pearl-route only: list of pearl-launch destinations
- *     - `enderpearlangles` — pearl-route only: list of pearl-launch trajectories
- *     - `secret`        — the secret itself: `{ type: ..., location: [x,y,z] }`
+ * ## Schema (correctly understood)
+ *
+ * Top-level keys are `"<RoomName>-<VariantId>"` — examples: `Tombstone-2`,
+ * `Waterfall-8`, `Withermancers-4:1`, `Blaze-Room-1-High`. The variant ID
+ * is whatever follows the last `-`; we keep it as a *string* because the
+ * upstream uses ints (`2`), int suffixes (`4:1`), and bare words (`High`,
+ * `Low`).
+ *
+ * **The value array is a SEQUENCE of [Step]s**, not alternates — each entry
+ * is one secret you collect, in order. Walk to step 0's secret, click/pick
+ * it, walk to step 1's secret, etc., until the variant's steps run out.
+ * Different `"RoomName-X"` keys for the same room are separate route
+ * VARIANTS the player can choose between (e.g. a short 2-secret route vs
+ * a full 8-secret clear). Each variant is an independent sequence.
+ *
+ * ## Step fields
+ *
+ *   - `locations`        — list of walk waypoints from "previous step end"
+ *                          to this step's secret
+ *   - `etherwarps`       — etherwarp targets along the way
+ *   - `mines`            — blocks to mine
+ *   - `interacts`        — blocks to right-click (lever, button, ...)
+ *   - `tnts`             — blocks to TNT
+ *   - `enderpearls`      — pearl-throw positions (player feet, fractional)
+ *   - `enderpearlangles` — `[pitch, yaw]` for each pearl
+ *   - `secret`           — the secret itself, `{ type: ..., location: [x,y,z] }`
  *
  * Coordinates are **relative** to the room's canonical (NORTH-facing) corner;
  * translate to world coords via
@@ -53,31 +67,32 @@ object RouteData {
      *  room's canonical orientation; rotate to world via [OdonRoom.getRealYaw]. */
     data class PitchYaw(val pitch: Float, val yaw: Float)
 
-    data class Route(
+    /** One secret in a route's sequence — its walk-path, action waypoints,
+     *  pearls, and the secret target. */
+    data class Step(
         val locations: List<BlockPos>,
         val etherwarps: List<BlockPos>,
         val mines: List<BlockPos>,
         val interacts: List<BlockPos>,
         val tnts: List<BlockPos>,
-        /** Pearl throw positions (player feet, fractional precision). Parallel
-         *  to [pearlAngles]: pearls[i] is thrown with angle pearlAngles[i]. */
         val pearls: List<Vec3>,
         val pearlAngles: List<PitchYaw>,
         val secret: Secret?,
     )
 
-    /** All routes for one secret. `secretIndex` is the suffix on the JSON key
-     *  (`Tombstone-2` → 2). `routes` are the alternate paths to that secret. */
-    data class RoomSecretRoutes(val secretIndex: Int, val routes: List<Route>)
+    /** A chosen-by-the-player route through a room: ordered sequence of [Step]s.
+     *  Multiple variants can exist per room (short vs full-clear, high vs low
+     *  pearl variants, etc.) — the SecretRoutes module picks one to follow. */
+    data class RouteVariant(val variantId: String, val steps: List<Step>)
 
     /** Keyed by [canonicalKey] (lowercase, alphanumeric-only) — the upstream
      *  route DB uses kebab-case (e.g. `Super-Tall`, `Arrow-Trap`) but COP's
      *  `odon_rooms.json` uses space-separated or concatenated (e.g. `Supertall`,
      *  `Arrow Trap`). Stripping all non-alphanumeric + lowercasing both sides
      *  makes the lookup work without an alias table. */
-    private val byCanonicalName: Map<String, List<RoomSecretRoutes>> by lazy { load() }
+    private val byCanonicalName: Map<String, List<RouteVariant>> by lazy { load() }
 
-    operator fun get(roomName: String?): List<RoomSecretRoutes> {
+    operator fun get(roomName: String?): List<RouteVariant> {
         if (roomName == null) return emptyList()
         return byCanonicalName[canonicalKey(roomName)].orEmpty()
     }
@@ -86,17 +101,25 @@ object RouteData {
         for (c in s) if (c.isLetterOrDigit()) append(c.lowercaseChar())
     }
 
-    private fun load(): Map<String, List<RoomSecretRoutes>> {
-        val merged = mutableMapOf<String, MutableMap<Int, MutableList<Route>>>()
+    private fun load(): Map<String, List<RouteVariant>> {
+        // (canonicalRoom -> (variantId -> stepList)).
+        // We tolerate the same `"RoomName-VariantId"` key appearing in BOTH
+        // routes.json and pearlroutes.json by taking the LONGER step list
+        // (pearl routes are typically more complete because they need every
+        // pearl-throw position recorded). Same-key collisions within a single
+        // file shouldn't happen, but if they do we likewise prefer the longer.
+        val merged = mutableMapOf<String, MutableMap<String, List<Step>>>()
         readFile("/assets/cop/secretroutes/routes.json", merged)
         readFile("/assets/cop/secretroutes/pearlroutes.json", merged)
 
-        return merged.mapValues { (_, bySecret) ->
-            bySecret.entries.sortedBy { it.key }.map { (idx, routes) -> RoomSecretRoutes(idx, routes) }
+        return merged.mapValues { (_, byVariant) ->
+            byVariant.entries
+                .sortedByDescending { it.value.size }   // longer variants first → default pick covers more secrets
+                .map { (id, steps) -> RouteVariant(id, steps) }
         }
     }
 
-    private fun readFile(path: String, into: MutableMap<String, MutableMap<Int, MutableList<Route>>>) {
+    private fun readFile(path: String, into: MutableMap<String, MutableMap<String, List<Step>>>) {
         val stream = RouteData::class.java.getResourceAsStream(path) ?: run {
             logger.warn("SecretRoutes data missing: {}", path)
             return
@@ -105,29 +128,34 @@ object RouteData {
             val root = stream.bufferedReader().use { JsonParser.parseReader(it) }.asJsonObject
             for ((key, value) in root.entrySet()) {
                 if (key.startsWith("#") || key == "Version") continue
-                val routesArray = value as? JsonArray ?: continue
-                val (roomName, secretIdx) = splitKey(key) ?: continue
+                val arr = value as? JsonArray ?: continue
+                val (roomName, variantId) = splitKey(key) ?: continue
 
-                val parsed = routesArray.mapNotNull { (it as? JsonObject)?.let(::parseRoute) }
-                if (parsed.isEmpty()) continue
+                val steps = arr.mapNotNull { (it as? JsonObject)?.let(::parseStep) }
+                if (steps.isEmpty()) continue
 
-                into.getOrPut(canonicalKey(roomName)) { mutableMapOf() }
-                    .getOrPut(secretIdx) { mutableListOf() }
-                    .addAll(parsed)
+                val canon = canonicalKey(roomName)
+                val byVariant = into.getOrPut(canon) { mutableMapOf() }
+                val existing = byVariant[variantId]
+                if (existing == null || steps.size > existing.size) {
+                    byVariant[variantId] = steps
+                }
             }
         } catch (e: Exception) {
             logger.error("Failed to parse SecretRoutes file $path", e)
         }
     }
 
-    private fun splitKey(key: String): Pair<String, Int>? {
+    /** Splits `"Tombstone-2"` → `("Tombstone", "2")`, `"Withermancers-4:1"` →
+     *  `("Withermancers", "4:1")`, `"Blaze-Room-1-High"` → `("Blaze-Room-1", "High")`.
+     *  The variant ID stays a string so non-integer suffixes parse correctly. */
+    private fun splitKey(key: String): Pair<String, String>? {
         val dash = key.lastIndexOf('-')
         if (dash <= 0 || dash == key.length - 1) return null
-        val idx = key.substring(dash + 1).toIntOrNull() ?: return null
-        return key.substring(0, dash) to idx
+        return key.substring(0, dash) to key.substring(dash + 1)
     }
 
-    private fun parseRoute(obj: JsonObject): Route = Route(
+    private fun parseStep(obj: JsonObject): Step = Step(
         locations = readPosList(obj, "locations"),
         etherwarps = readPosList(obj, "etherwarps"),
         mines = readPosList(obj, "mines"),

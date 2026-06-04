@@ -25,7 +25,7 @@ import cop.utils.render.drawFilledBox
 import cop.utils.render.drawLine
 import cop.utils.render.drawText
 import cop.utils.render.drawWireFrameBox
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -33,20 +33,21 @@ import kotlin.math.sin
  * Renders secret routes for the current dungeon room as world-space waypoints.
  *
  * Route data ships with COP at `assets/cop/secretroutes/{routes,pearlroutes}.json`,
- * sourced from yourboykyle's Secret Routes Mod (see `CREDITS.md`). Coordinates in
- * the DB are room-canonical; on room enter we look them up by [OdonRoom.name] and
- * pre-translate them to world coords via [OdonRoom.getRealCoords], so the render
- * loop is just iteration + draw calls.
+ * sourced from yourboykyle's Secret Routes Mod (see `CREDITS.md`). Each room's
+ * JSON entry is a *sequence* of steps — collect step 0's secret, then step 1's,
+ * etc. — and a room can have multiple route variants (e.g. a short 2-secret
+ * route vs a full-clear 8-secret one). We default to the longest variant.
  *
- * By default only the route to the **nearest still-uncollected secret** in the
- * room is drawn — most rooms have 2–8 secrets and rendering every alternate for
- * every secret simultaneously is visually overwhelming. As you complete secrets
- * (head clicked, bat killed, item picked up) the active route auto-advances to
- * the next nearest one. Flip [showAllSecrets] on for the whole-room overview.
+ * Default view: only the *active* (first uncollected) step's full route is
+ * rendered, plus small target dots for the upcoming secrets in the variant so
+ * you can preview what's next. As you complete each step (via the secret-event
+ * hooks, the INTERACT-head block poll, or the BAT/ITEM proximity poll) the
+ * active step advances. Per-run completion state persists across room re-enters
+ * within the same dungeon — once you've done a secret it stays hidden.
  *
- * Display only. There is no playback, no auto-walk, no clicking. The original COP
- * port that *did* play routes back was removed (commit `9cdbbf9`) for being too
- * fragile; this module is the simpler "show me where to go" replacement.
+ * Display only. There is no playback, no auto-walk, no clicking. The original
+ * COP port that *did* play routes back was removed (commit `9cdbbf9`) for being
+ * too fragile; this module is the simpler "show me where to go" replacement.
  */
 object SecretRoutes : Module(
     "Secret Routes",
@@ -55,33 +56,37 @@ object SecretRoutes : Module(
 ) {
     // -- Settings -----------------------------------------------------------
 
-    private val showAllSecrets by switch(
-        "Show all secrets", false,
-        desc = "On: every secret's route in the room is rendered at once (busy view). Off: only the route to the secret closest to you."
+    private val showAllSteps by switch(
+        "Show whole route", false,
+        desc = "On: render the FULL route (line + waypoints) for every uncollected step in the chosen variant. Off: only the active (next-to-do) step gets the full treatment; remaining steps show as small target dots."
+    )
+    private val showUpcomingTargets by switch(
+        "Show upcoming secrets", true,
+        desc = "When only the active step's route is rendered, also draw a small target dot on each upcoming secret in the variant so you can see what's coming."
+    )
+    private val showAllVariants by switch(
+        "Show all variants", false,
+        desc = "If a room has multiple known route variants (e.g. Waterfall has a 2-secret and an 8-secret variant), render all of them. Off: only the chosen variant (longest by default)."
     )
     private val nextSecretKey = keybind(
         "Skip current secret", CatKeys.KEY_NONE,
-        desc = "Manually mark the currently-displayed secret as done so the route jumps to the next nearest one. Useful when auto-advance misses (chest secrets, weird lever positions, etc.)."
+        desc = "Manually mark the active secret as done so the route advances to the next step in the variant. Useful when auto-advance misses (chest secrets, weird positions, etc.)."
     ).onPress { skipCurrentSecret() }.also { register(it) }
-    private val showAllAlternates by switch(
-        "Show alternates", false,
-        desc = "When a secret has multiple known routes, show all of them instead of a single fixed pick (always the first alternate in the DB)."
-    )
     private val autoAdvance by switch(
         "Auto-advance", true,
-        desc = "Mark secrets you've already collected as done (via secret-interact / item-pickup / bat-kill events) so the active route auto-switches to the next nearest one."
+        desc = "Mark steps you've already collected as done (via secret-interact / item-pickup / bat-kill events, INTERACT-head block check, or BAT/ITEM proximity) so the active step auto-switches forward."
     )
     private val showBeacon by switch(
         "Beacon beam", true,
-        desc = "Draw a tall translucent vertical column on each secret target so you can spot them through walls from across the room."
+        desc = "Draw a tall translucent vertical column on each visible secret target so you can spot them through walls from across the room."
     )
     private val showPearls by switch(
         "Pearl trajectories", true,
-        desc = "Render pearl-throw positions + a line along the look angle showing where to aim the ender pearl. Comes from the pearl-route DB (a few rooms have these)."
+        desc = "Render pearl-throw positions + a line along the look angle showing where to aim the ender pearl. Comes from the pearl-route DB."
     )
     private val showStartMarker by switch(
         "Mark start", true,
-        desc = "Draw a wireframe box at the first waypoint of each rendered route so you can tell where to begin."
+        desc = "Draw a wireframe box at the first waypoint of the active step's route so you can tell where to begin."
     )
     private val showStartLabel by switch(
         "Label start", true,
@@ -114,7 +119,7 @@ object SecretRoutes : Module(
     )
     private val startColour by colourPicker(
         "Start", Colour.LIME.withAlpha(0.9f), allowAlpha = true,
-        desc = "Wireframe box at the route's first waypoint."
+        desc = "Wireframe box at the active route's first waypoint."
     )
     private val etherwarpColour by colourPicker(
         "Etherwarp", Colour.BLUE.withAlpha(0.35f), allowAlpha = true,
@@ -137,8 +142,6 @@ object SecretRoutes : Module(
         desc = "Pearl throw position marker + trajectory preview line."
     )
 
-    // Per-secret-type target colours — knowing the type at a glance tells you
-    // what to do (chest → open, bat → wait, item → walk to ground, etc.).
     private val secretInteractColour by colourPicker(
         "Secret: interact", Colour.RED.withAlpha(0.45f), allowAlpha = true,
         desc = "Secret target — interact head."
@@ -164,7 +167,11 @@ object SecretRoutes : Module(
 
     private data class WorldPearl(val throwPos: Vec3, val angle: PitchYaw)
 
-    private data class WorldRoute(
+    private data class WorldSecret(val type: SecretType, val pos: BlockPos)
+
+    /** Pre-translated counterpart of [RouteData.Step] — coordinates already in
+     *  world space so the render loop doesn't redo the rotation each frame. */
+    private class WorldStep(
         val locations: List<Vec3>,
         val etherwarps: List<BlockPos>,
         val mines: List<BlockPos>,
@@ -172,63 +179,47 @@ object SecretRoutes : Module(
         val tnts: List<BlockPos>,
         val pearls: List<WorldPearl>,
         val secret: WorldSecret?,
-    )
-
-    private data class WorldSecret(val type: SecretType, val pos: BlockPos)
-
-    /** Grouped by secret index so "single nearest secret" + "alternates" filters work. */
-    private class RoutesForSecret(val secretIndex: Int, val alternates: List<WorldRoute>) {
-        /** Anchor used for "which secret is closest to the player" — prefer the
-         *  secret target itself (the thing you're trying to reach); fall back to
-         *  the first waypoint of any alternate if no secret position is recorded. */
-        val anchor: Vec3? = alternates.firstNotNullOfOrNull { it.secret?.let { s -> Vec3.atCenterOf(s.pos) } }
-            ?: alternates.firstNotNullOfOrNull { it.locations.firstOrNull() }
-        /** Flipped to true by auto-advance event hooks (or the per-frame block
-         *  re-check for INTERACT-head secrets, or the manual "next" keybind).
-         *  Once true the group is skipped for both "nearest" pick and target-box
-         *  rendering. @Volatile because the event handlers are dispatched on the
-         *  network thread. */
+    ) {
+        /** Marked true by auto-advance (events / poll / proximity) or by the
+         *  manual skip keybind. @Volatile because event handlers can run on
+         *  the network thread. */
         @Volatile var collected: Boolean = false
-        /** True only if this group's secret target was an actual PLAYER_HEAD
-         *  block at room-enter time. Used to gate the per-frame "block missing
-         *  => collected" check — INTERACT secrets are commonly levers / buttons
-         *  / chests where polling for PLAYER_HEAD absence would mark them
-         *  collected immediately. Set in [onRoomEnter] for INTERACT/UNKNOWN
-         *  types only. */
+        /** True iff this step's secret was a PLAYER_HEAD block at room-enter
+         *  time. Gates the per-frame "head removed" poll — INTERACT secrets
+         *  also cover levers / chests / buttons where polling for PLAYER_HEAD
+         *  absence would falsely mark them collected on the first frame. */
         var pollableAsHead: Boolean = false
     }
 
-    private val activeRoutes = CopyOnWriteArrayList<RoutesForSecret>()
+    private class WorldVariant(val variantId: String, val steps: List<WorldStep>) {
+        /** First uncollected step in the sequence, or null if the variant is
+         *  fully done. */
+        fun activeStep(): WorldStep? = steps.firstOrNull { !it.collected }
 
-    /** Persistent across the current dungeon run: `(roomName, secretIndex)` of
-     *  every secret we marked collected via a *genuine completion signal*
-     *  (Secret.Interact / Secret.Item / Secret.Bat events, the INTERACT-head
-     *  block poll, or the BAT/ITEM proximity poll). Re-entering the same room
-     *  later in the run rebuilds [activeRoutes] but immediately re-marks any
-     *  group whose key appears here, so the already-done secrets stay hidden.
+        fun activeStepIndex(): Int = steps.indexOfFirst { !it.collected }
+    }
+
+    /** Variants for the current room, in their DB order (longest first per
+     *  [RouteData.load]'s sort). The "chosen variant" is `[0]` unless
+     *  [showAllVariants] is on. */
+    private val activeVariants = java.util.concurrent.CopyOnWriteArrayList<WorldVariant>()
+
+    /** Persistent across the current dungeon run: `(roomName, variantId, stepIndex)`
+     *  of every step we marked collected via a *genuine completion signal*. Re-
+     *  entering the same room rebuilds [activeVariants] but re-marks any step
+     *  whose triple is here, so already-done steps stay hidden.
      *
      *  Manual skip-keybind completions are intentionally *not* persisted — the
-     *  user might want to come back and see that route later in the run. The
-     *  set is cleared on [WorldEvent.Change] (entering / leaving the dungeon
-     *  is a world swap, so a fresh dungeon run starts with an empty set). */
-    private val completedSecrets = java.util.concurrent.ConcurrentHashMap.newKeySet<Pair<String, Int>>()
+     *  user might want to come back to that secret. Cleared on [WorldEvent.Change]. */
+    private val completedSteps = ConcurrentHashMap.newKeySet<Triple<String, String, Int>>()
 
-    /** Tracked separately from [Dungeon.currentRoom] because we want the name
-     *  the *routes were loaded under* (which we already canonicalised against
-     *  the route DB), so the persistence key matches what gets re-checked on
-     *  room re-enter. */
     @Volatile private var currentRoomName: String? = null
 
-    /** Auto-advance hit radii — how close an event's position must be to a
-     *  recorded secret to count as "this is the one that fired". Bats need a
-     *  larger window since they fly around before being killed. */
+    // -- Tunables not surfaced as settings ---------------------------------
+
     private const val INTERACT_HIT_RADIUS = 4.0
     private const val ITEM_HIT_RADIUS = 4.0
     private const val BAT_HIT_RADIUS = 8.0
-    /** Proximity radii for the per-frame "player is standing right on the
-     *  secret" fallback. Smaller than the event radii because this is a
-     *  player-position check, not a packet-source-position one. Matches
-     *  yourboykyle's beta3 reference (3 / 2). */
     private const val BAT_PROXIMITY_RADIUS = 3.0
     private const val ITEM_PROXIMITY_RADIUS = 2.0
 
@@ -238,91 +229,82 @@ object SecretRoutes : Module(
         }
 
         on<WorldEvent.Change> {
-            activeRoutes.clear()
+            activeVariants.clear()
             currentRoomName = null
             // New dungeon run / lobby exit — wipe the per-run completed log
             // so we start fresh next dungeon.
-            completedSecrets.clear()
+            completedSteps.clear()
         }
 
-        // Auto-advance hooks --------------------------------------------------
+        // Auto-advance event hooks ------------------------------------------
         on<DungeonEvent.Secret.Interact> {
             if (!autoAdvance) return@on
-            markCollectedNearest(Vec3.atCenterOf(blockPos), INTERACT_HIT_RADIUS) {
+            markStepCollectedNearest(Vec3.atCenterOf(blockPos), INTERACT_HIT_RADIUS) {
                 it == SecretType.INTERACT || it == SecretType.UNKNOWN
             }
         }
         on<DungeonEvent.Secret.Item> {
             if (!autoAdvance) return@on
-            markCollectedNearest(entity.position(), ITEM_HIT_RADIUS) { it == SecretType.ITEM }
+            markStepCollectedNearest(entity.position(), ITEM_HIT_RADIUS) { it == SecretType.ITEM }
         }
         on<DungeonEvent.Secret.Bat> {
             if (!autoAdvance) return@on
-            markCollectedNearest(Vec3(packet.x, packet.y, packet.z), BAT_HIT_RADIUS) { it == SecretType.BAT }
+            markStepCollectedNearest(Vec3(packet.x, packet.y, packet.z), BAT_HIT_RADIUS) { it == SecretType.BAT }
         }
 
         on<RenderEvent.World> {
             if (!inDungeons || inBoss) return@on
-            if (activeRoutes.isEmpty()) return@on
+            if (activeVariants.isEmpty()) return@on
 
-            // Catch INTERACT secrets that got collected without a Secret.Interact
-            // event (e.g. another party member clicked, or we entered the room
-            // after they were already gone). Cheap — at most ~8 getBlockState
-            // calls per frame.
             if (autoAdvance) {
                 refreshInteractCollected()
                 refreshProximityCollected()
             }
 
-            val playerPos = mc.player?.position()
-            val visibleGroups = activeRoutes.filter { !it.collected }
+            val variantsToConsider = if (showAllVariants) activeVariants else listOfNotNull(activeVariants.firstOrNull())
 
-            // Always draw a small target marker for EVERY still-uncollected
-            // secret in the room so the player has spatial awareness even when
-            // only one route's full path is rendered.
-            if (!showAllSecrets) {
-                for (group in visibleGroups) {
-                    val s = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
-                    drawSecretTarget(s)
-                }
-            }
-
-            val groupsToDraw = if (showAllSecrets) {
-                visibleGroups
-            } else {
-                val nearest = playerPos?.let { p -> visibleGroups.minByOrNull { it.anchor?.distanceToSqr(p) ?: Double.MAX_VALUE } }
-                    ?: visibleGroups.firstOrNull()
-                if (nearest == null) return@on else listOf(nearest)
-            }
-
-            for (group in groupsToDraw) {
-                // Pick a deterministic alternate (`alternates[0]`) so the
-                // rendered route — and especially its Start marker — stays
-                // fixed as the player walks around. Previously we picked the
-                // alternate whose first waypoint was closest to the player,
-                // which made the route flip-flop and the Start box jump.
-                val routesToDraw = if (showAllAlternates) {
-                    group.alternates
+            for (variant in variantsToConsider) {
+                if (showAllSteps) {
+                    // Whole-route view: draw the full route for every uncollected
+                    // step in the variant.
+                    for (step in variant.steps) {
+                        if (step.collected) continue
+                        drawStep(step, isActive = (step === variant.activeStep()))
+                    }
                 } else {
-                    listOfNotNull(group.alternates.firstOrNull())
+                    // Default view: only the active step gets the full route;
+                    // upcoming steps show as small target dots if enabled.
+                    val active = variant.activeStep() ?: continue
+                    if (showUpcomingTargets) {
+                        var seenActive = false
+                        for (step in variant.steps) {
+                            if (step.collected) continue
+                            if (step === active) { seenActive = true; continue }
+                            if (!seenActive) continue   // safety — shouldn't happen
+                            val s = step.secret ?: continue
+                            drawSecretTargetCompact(s)
+                        }
+                    }
+                    drawStep(active, isActive = true)
                 }
-                for (route in routesToDraw) drawRoute(route)
             }
         }
     }
 
-    private fun RenderEvent.World.drawRoute(route: WorldRoute) {
+    // -- Render helpers ----------------------------------------------------
+
+    private fun RenderEvent.World.drawStep(step: WorldStep, isActive: Boolean) {
         val depth = !throughWalls
 
-        if (route.locations.size >= 2) {
-            ctx.drawLine(route.locations, lineColour, depth = depth, thickness = lineThickness)
+        if (step.locations.size >= 2) {
+            ctx.drawLine(step.locations, lineColour, depth = depth, thickness = lineThickness)
         }
-        val firstLoc = route.locations.firstOrNull()
-        if (showStartMarker && firstLoc != null) {
+        val firstLoc = step.locations.firstOrNull()
+        if (isActive && showStartMarker && firstLoc != null) {
             val pos = BlockPos(firstLoc.x.toInt(), (firstLoc.y - 0.5).toInt(), firstLoc.z.toInt())
             ctx.drawWireFrameBox(pos.aabb, startColour, thickness = startThickness, depth = depth)
         }
-        if (showStartLabel && firstLoc != null) {
+        if (isActive && showStartLabel && firstLoc != null) {
             ctx.drawText(
                 literal("Start").withColor(startColour.rgb),
                 firstLoc.add(0.0, 1.6, 0.0),
@@ -331,7 +313,7 @@ object SecretRoutes : Module(
             )
         }
         if (showWaypointNumbers) {
-            route.locations.forEachIndexed { idx, loc ->
+            step.locations.forEachIndexed { idx, loc ->
                 ctx.drawText(
                     literal((idx + 1).toString()).withColor(lineColour.rgb),
                     loc.add(0.0, 0.85, 0.0),
@@ -340,27 +322,21 @@ object SecretRoutes : Module(
                 )
             }
         }
-        drawBoxes(route.etherwarps, etherwarpColour)
-        drawBoxes(route.mines, mineColour)
-        drawBoxes(route.interacts, interactColour)
-        drawBoxes(route.tnts, tntColour)
-        if (showPearls) drawPearls(route.pearls)
-        route.secret?.let { drawSecretTarget(it) }
+        drawBoxes(step.etherwarps, etherwarpColour)
+        drawBoxes(step.mines, mineColour)
+        drawBoxes(step.interacts, interactColour)
+        drawBoxes(step.tnts, tntColour)
+        if (showPearls) drawPearls(step.pearls)
+        step.secret?.let { drawSecretTarget(it) }
     }
 
-    /** Draw the secret-target box and (optionally) the beacon column. */
+    /** Full secret target with optional beacon column — for active or whole-route view. */
     private fun RenderEvent.World.drawSecretTarget(s: WorldSecret) {
         val depth = !throughWalls
         val targetColour = colourForSecret(s.type)
         ctx.drawFilledBox(s.pos.aabb, targetColour, depth = depth)
         if (showBeacon) {
             val beamColour = targetColour.withAlpha(0.18f)
-            // 0.3-block-wide vertical column from the floor up to build limit.
-            // Using a single tall AABB instead of MC's BeaconRenderer because
-            // the 1.21.10 BeaconRenderer API moved to the deferred-render
-            // SubmitNodeCollector pipeline which WorldRenderContext doesn't
-            // expose — a translucent filled box gives the same "spot it from
-            // far across the room" affordance for ~3 lines of code.
             val cx = s.pos.x + 0.5
             val cz = s.pos.z + 0.5
             val beam = AABB(cx - 0.15, s.pos.y.toDouble(), cz - 0.15, cx + 0.15, 320.0, cz + 0.15)
@@ -368,19 +344,25 @@ object SecretRoutes : Module(
         }
     }
 
+    /** Compact target marker for upcoming-secret-awareness — smaller box, no
+     *  beacon. Keeps the lookahead visually distinct from the active step. */
+    private fun RenderEvent.World.drawSecretTargetCompact(s: WorldSecret) {
+        val depth = !throughWalls
+        val targetColour = colourForSecret(s.type).withAlpha(0.5f)
+        val cx = s.pos.x + 0.5
+        val cz = s.pos.z + 0.5
+        val cy = s.pos.y + 0.5
+        val small = AABB(cx - 0.3, cy - 0.3, cz - 0.3, cx + 0.3, cy + 0.3, cz + 0.3)
+        ctx.drawFilledBox(small, targetColour, depth = depth)
+    }
+
     private fun RenderEvent.World.drawPearls(pearls: List<WorldPearl>) {
         if (pearls.isEmpty()) return
         val depth = !throughWalls
         for (p in pearls) {
-            // Small marker box at the throw position (player feet), 0.5 cube.
             val markBox = AABB(p.throwPos.x - 0.25, p.throwPos.y, p.throwPos.z - 0.25,
                                p.throwPos.x + 0.25, p.throwPos.y + 0.5, p.throwPos.z + 0.25)
             ctx.drawFilledBox(markBox, pearlColour, depth = depth)
-
-            // Eye position + 10-block ray along the look direction. Matches the
-            // upstream SecretRoutes mod's pearl preview (which also draws a
-            // straight 10-block ray, not a parabolic arc — the ray approximates
-            // the pearl's first ~1 second of flight before gravity bends it).
             val yawRad = Math.toRadians(p.angle.yaw.toDouble())
             val pitchRad = Math.toRadians(p.angle.pitch.toDouble())
             val cosP = cos(pitchRad)
@@ -411,133 +393,143 @@ object SecretRoutes : Module(
 
     // -- Auto-advance plumbing ---------------------------------------------
 
-    /** Mark the closest uncollected secret matching [typePredicate] within
-     *  [radius] blocks of [eventPos] as collected. No-op if no match. */
-    private fun markCollectedNearest(eventPos: Vec3, radius: Double, typePredicate: (SecretType) -> Boolean) {
-        if (activeRoutes.isEmpty()) return
+    /** Find the closest uncollected step (across the chosen variants) whose
+     *  secret matches [typePredicate] and is within [radius] of [eventPos];
+     *  mark it AND all earlier-in-the-variant steps as collected. Marking
+     *  earlier steps handles out-of-order completion (player skipped ahead). */
+    private fun markStepCollectedNearest(eventPos: Vec3, radius: Double, typePredicate: (SecretType) -> Boolean) {
+        if (activeVariants.isEmpty()) return
+        val variantsToConsider = if (showAllVariants) activeVariants else listOfNotNull(activeVariants.firstOrNull())
         val r2 = radius * radius
-        var best: RoutesForSecret? = null
+
+        var bestVariant: WorldVariant? = null
+        var bestStepIdx = -1
         var bestSqr = r2
-        for (group in activeRoutes) {
-            if (group.collected) continue
-            val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
-            if (!typePredicate(secret.type)) continue
-            val d2 = Vec3.atCenterOf(secret.pos).distanceToSqr(eventPos)
-            if (d2 <= bestSqr) {
-                bestSqr = d2
-                best = group
+        for (variant in variantsToConsider) {
+            variant.steps.forEachIndexed { idx, step ->
+                if (step.collected) return@forEachIndexed
+                val secret = step.secret ?: return@forEachIndexed
+                if (!typePredicate(secret.type)) return@forEachIndexed
+                val d2 = Vec3.atCenterOf(secret.pos).distanceToSqr(eventPos)
+                if (d2 <= bestSqr) {
+                    bestSqr = d2
+                    bestVariant = variant
+                    bestStepIdx = idx
+                }
             }
         }
-        best?.let { markGroupCompleted(it) }
+        val v = bestVariant ?: return
+        markStepAndEarlierCompleted(v, bestStepIdx)
     }
 
-    /** Marks a group collected AND remembers it in [completedSecrets] so the
-     *  route stays hidden if the player re-enters the room later in the run.
-     *  Use only for genuine completion signals (events / proximity / head poll);
-     *  the manual skip keybind should write [RoutesForSecret.collected] directly
-     *  so it doesn't persist across re-entries. */
-    private fun markGroupCompleted(group: RoutesForSecret) {
-        group.collected = true
-        val room = currentRoomName ?: return
-        completedSecrets += room to group.secretIndex
+    /** Mark step at [endIdx] as collected and (for monotonic variant flow)
+     *  also mark every earlier still-uncollected step. Persist all of them. */
+    private fun markStepAndEarlierCompleted(variant: WorldVariant, endIdx: Int) {
+        val room = currentRoomName
+        for (i in 0..endIdx) {
+            val step = variant.steps[i]
+            if (step.collected) continue
+            step.collected = true
+            if (room != null) completedSteps += Triple(room, variant.variantId, i)
+        }
     }
 
-    /** INTERACT-head secrets that got removed without firing our event (e.g. a
-     *  party-mate clicked them) — detect by checking the block at the recorded
-     *  position is no longer a player head. Only runs on secrets we *know* were
-     *  PLAYER_HEAD at room-enter (see [RoutesForSecret.pollableAsHead]) —
-     *  otherwise lever / button / chest INTERACT secrets would mark themselves
-     *  collected immediately, since their block isn't a PLAYER_HEAD ever. */
+    /** Active INTERACT-head steps that disappeared from world state without
+     *  firing a Secret.Interact (party-mate clicked, we entered after the head
+     *  was already gone, ...). Only runs on steps we *know* were PLAYER_HEAD
+     *  at room enter — see [WorldStep.pollableAsHead]. */
     private fun refreshInteractCollected() {
         val level = mc.level ?: return
-        for (group in activeRoutes) {
-            if (group.collected || !group.pollableAsHead) continue
-            val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
-            if (!level.getBlockState(secret.pos).`is`(Blocks.PLAYER_HEAD)) {
-                markGroupCompleted(group)
+        val variantsToConsider = if (showAllVariants) activeVariants else listOfNotNull(activeVariants.firstOrNull())
+        for (variant in variantsToConsider) {
+            variant.steps.forEachIndexed { idx, step ->
+                if (step.collected || !step.pollableAsHead) return@forEachIndexed
+                val secret = step.secret ?: return@forEachIndexed
+                if (!level.getBlockState(secret.pos).`is`(Blocks.PLAYER_HEAD)) {
+                    markStepAndEarlierCompleted(variant, idx)
+                }
             }
         }
     }
 
-    /** Per-frame fallback for BAT/ITEM secrets that the packet-event hooks
-     *  missed (e.g. item velocity pushed it away before pickup, or the bat
-     *  damage sound got dropped). If the player is standing within the
-     *  type-specific proximity radius of an uncollected BAT/ITEM secret,
-     *  mark it collected. Matches yourboykyle beta3's auto-advance fallback. */
+    /** Per-frame BAT/ITEM fallback: if the player is standing within the
+     *  type-specific proximity radius of an uncollected BAT/ITEM step, mark it. */
     private fun refreshProximityCollected() {
         val player = mc.player?.position() ?: return
-        for (group in activeRoutes) {
-            if (group.collected) continue
-            val secret = group.alternates.firstNotNullOfOrNull { it.secret } ?: continue
-            val radius = when (secret.type) {
-                SecretType.BAT  -> BAT_PROXIMITY_RADIUS
-                SecretType.ITEM -> ITEM_PROXIMITY_RADIUS
-                else -> continue
-            }
-            if (Vec3.atCenterOf(secret.pos).distanceToSqr(player) <= radius * radius) {
-                markGroupCompleted(group)
+        val variantsToConsider = if (showAllVariants) activeVariants else listOfNotNull(activeVariants.firstOrNull())
+        for (variant in variantsToConsider) {
+            variant.steps.forEachIndexed { idx, step ->
+                if (step.collected) return@forEachIndexed
+                val secret = step.secret ?: return@forEachIndexed
+                val radius = when (secret.type) {
+                    SecretType.BAT  -> BAT_PROXIMITY_RADIUS
+                    SecretType.ITEM -> ITEM_PROXIMITY_RADIUS
+                    else -> return@forEachIndexed
+                }
+                if (Vec3.atCenterOf(secret.pos).distanceToSqr(player) <= radius * radius) {
+                    markStepAndEarlierCompleted(variant, idx)
+                }
             }
         }
     }
 
-    /** Mark the secret that the route is currently pointing at as collected,
-     *  so the active route hops to the next-nearest uncollected one. Bound to
-     *  the "Skip current secret" keybind. */
+    /** Manual override: mark the active step (in the chosen variant) as done
+     *  so the route advances. Does NOT persist — re-entering the room will
+     *  re-show that step. The user might want to come back. */
     private fun skipCurrentSecret() {
-        if (activeRoutes.isEmpty()) return
-        val playerPos = mc.player?.position() ?: return
-        val visible = activeRoutes.filter { !it.collected }
-        val target = visible.minByOrNull { it.anchor?.distanceToSqr(playerPos) ?: Double.MAX_VALUE } ?: return
-        target.collected = true
+        val variant = activeVariants.firstOrNull() ?: return
+        val active = variant.activeStep() ?: return
+        active.collected = true
     }
 
     // -- Room enter --------------------------------------------------------
 
     private fun onRoomEnter(room: OdonRoom?) {
-        activeRoutes.clear()
+        activeVariants.clear()
         currentRoomName = room?.name
         if (room == null) return
 
-        val groups = RouteData[room.name]
-        if (groups.isEmpty()) return
+        val variants = RouteData[room.name]
+        if (variants.isEmpty()) return
 
         val level = mc.level
         val roomName = room.name
-        for (group in groups) {
-            val translated = group.routes.map { r ->
-                WorldRoute(
-                    locations = r.locations.map { Vec3.atCenterOf(room.getRealCoords(it)) },
-                    etherwarps = r.etherwarps.map(room::getRealCoords),
-                    mines = r.mines.map(room::getRealCoords),
-                    interacts = r.interacts.map(room::getRealCoords),
-                    tnts = r.tnts.map(room::getRealCoords),
-                    pearls = r.pearls.zip(r.pearlAngles) { pos, ang ->
+        for (variant in variants) {
+            val translatedSteps = variant.steps.map { step ->
+                val world = WorldStep(
+                    locations = step.locations.map { Vec3.atCenterOf(room.getRealCoords(it)) },
+                    etherwarps = step.etherwarps.map(room::getRealCoords),
+                    mines = step.mines.map(room::getRealCoords),
+                    interacts = step.interacts.map(room::getRealCoords),
+                    tnts = step.tnts.map(room::getRealCoords),
+                    pearls = step.pearls.zip(step.pearlAngles) { pos, ang ->
                         WorldPearl(
                             throwPos = room.getRealCoords(pos),
                             angle = PitchYaw(ang.pitch, room.getRealYaw(ang.yaw)),
                         )
                     },
-                    secret = r.secret?.let { WorldSecret(it.type, room.getRealCoords(it.location)) },
+                    secret = step.secret?.let { WorldSecret(it.type, room.getRealCoords(it.location)) },
                 )
+                // Snapshot pollable-as-head at room-enter so the per-frame poll
+                // doesn't false-positive on levers / buttons / chests.
+                val s = world.secret
+                if (s != null && (s.type == SecretType.INTERACT || s.type == SecretType.UNKNOWN) &&
+                    level?.getBlockState(s.pos)?.`is`(Blocks.PLAYER_HEAD) == true
+                ) {
+                    world.pollableAsHead = true
+                }
+                world
             }
-            val rfs = RoutesForSecret(group.secretIndex, translated)
-            // Snapshot: is this an actual PLAYER_HEAD interact secret? If so,
-            // the per-frame "block missing => collected" poll is safe. If it's
-            // a lever / chest / button INTERACT (or BAT / ITEM / etc.), poll
-            // would falsely auto-collect on first frame.
-            val secret = translated.firstNotNullOfOrNull { it.secret }
-            if (secret != null && (secret.type == SecretType.INTERACT || secret.type == SecretType.UNKNOWN) &&
-                level?.getBlockState(secret.pos)?.`is`(Blocks.PLAYER_HEAD) == true
-            ) {
-                rfs.pollableAsHead = true
+            val worldVariant = WorldVariant(variant.variantId, translatedSteps)
+            // Re-apply per-run completion state: if a step was already
+            // collected earlier in the run (we left + re-entered), mark it
+            // collected again so the route stays advanced.
+            worldVariant.steps.forEachIndexed { idx, step ->
+                if (Triple(roomName, variant.variantId, idx) in completedSteps) {
+                    step.collected = true
+                }
             }
-            // Re-apply per-run completion state: if this secret was already
-            // collected earlier in the run (then we left + re-entered the room),
-            // mark it collected again so the route stays hidden.
-            if (roomName to group.secretIndex in completedSecrets) {
-                rfs.collected = true
-            }
-            activeRoutes += rfs
+            activeVariants += worldVariant
         }
     }
 }

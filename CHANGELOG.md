@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] — 2026-06-04
+
+### Fixed
+- **Secret Routes — Schema komplett falsch gelesen, jetzt richtig**: User-Report "wenn ich ein secret auf der route gemacht habe... die whole route disappears nicht der part zu dem ersten secret so i cant continue the rest of the secrets in the room".
+
+  Ursache: jeder JSON-Eintrag unter `"RoomName-N"` ist NICHT eine Alternative zum gleichen Secret (wie bisher angenommen), sondern ein **sequentieller Schritt** in einer Route. `Waterfall-8` hat z.B. 8 Steps die nacheinander 8 Secrets im Raum abklappern. Mehrere `"RoomName-N"` Keys für den gleichen Raum = mehrere Route-VARIANTEN die der Spieler auswählen kann (z.B. Waterfall hat eine 1-Step-Kurzversion `Waterfall-2` und eine 8-Step-Vollversion `Waterfall-8`).
+  
+  Bisheriger Code hat jeden Eintrag als Alternative behandelt und nur `entry[0]` gerendert → beim Einsammeln des ersten Secrets wurde der gesamte "Group" als done markiert und alle 7 weiteren Steps der Variant waren unsichtbar.
+
+  Komplettes Refactor:
+  - `RouteData`: neue Typen `Step` (statt `Route`) und `RouteVariant`. Variant-ID ist jetzt ein String (vorher nur Int) — fängt non-numerische Suffixes wie `Withermancers-4:1` und `Blaze-Room-1-High` ab die vorher silent gedropped wurden. Mehrere Varianten pro Raum werden sortiert nach Step-Count → default-pick ist die längste (covers most secrets).
+  - `SecretRoutes`-Modul: walks pro Variant durch die Steps via "first uncollected = active step". Default-Render zeigt nur die aktive Step's volle Route + kleine Target-Dots auf den upcoming Secrets der Variant zur Awareness. Schalter "Show whole route" rendert alle uncollected Steps voll.
+  - Auto-Advance: Event-Hooks markieren jetzt den passenden Step in der Variant (statt ein Group); out-of-order-Completion wird sauber gehandled (Step N collected → alle Steps 0..N werden ebenfalls als done markiert damit "active = first uncollected" stimmt).
+  - Per-Run-Persistenz: Set keyed by `(roomName, variantId, stepIndex)` statt `(roomName, secretIndex)`.
+- Neue Schalter: "Show whole route", "Show upcoming secrets", "Show all variants".
+
 ## [1.4.2] — 2026-06-04
 
 ### Fixed
