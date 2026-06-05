@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] — 2026-06-04
+
+### Fixed
+- **Auto Croesus — Galatea-Shards bekommen jetzt ihren Bazaar-Preis**: User-Report "auto croesus didnt reconized shard right and we put it always to 0". Die neuen Hunting-Box-Shards (z.B. `SHARD_POWER_DRAGON` = ~207k auf dem Bazaar) waren in der Profit-Berechnung als 0 geführt. Ursache: die Hypixel-Items-Registry kennt diese Shards nicht (stoppt vor der Galatea-Update-Ära), und der Parser-Fallback hat den display name `"Power Dragon Shard"` zu `POWER_DRAGON_SHARD` synthesisiert — Suffix statt Prefix, falsche Form. Auf dem Bazaar heißen sie `SHARD_<MONSTER>`. Neuer `PriceClient.resolveShardId()`-Helper erkennt die `"X Shard"` / `"X Shards"` Endung, schlägt `SHARD_X` vor und confirmt es gegen die Bazaar-Liste. Wird in `CroesusParser.tryParseLine` zwischen Registry-Lookup und der generischen Snake-Case-Synthese eingehängt. Funktioniert für alle ~189 SHARD_-IDs auf dem Bazaar.
+
 ## [1.4.3] — 2026-06-04
 
 ### Fixed
