@@ -307,12 +307,14 @@ object CroesusParser {
             qtyMatch.groupValues[1] to qtyMatch.groupValues[2].toInt()
         } else plain to 1
 
-        // Resolve via the registry; if that fails, synthesise a canonical-
+        // Resolve via the registry; if that fails, try the Galatea-shard
+        // shape (SHARD_<NAME> rather than <NAME>_SHARD — see PriceClient.
+        // resolveShardId); if that also fails, synthesise a canonical-
         // looking id from the name itself. Many Hypixel items have IDs that
         // are just the display name uppercased with spaces replaced by
-        // underscores (e.g. "Power Dragon Shard" → "POWER_DRAGON_SHARD"), so
-        // this often hits the bazaar/AH anyway.
+        // underscores, so the generic fallback often still hits the bazaar/AH.
         val id = PriceClient.resolveItemId(namePart)
+            ?: PriceClient.resolveShardId(namePart)
             ?: namePart.uppercase().replace(' ', '_').replace("'", "")
         return id to qty
     }

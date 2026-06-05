@@ -94,6 +94,27 @@ object PriceClient {
     fun resolveItemId(displayName: String): String? =
         nameToId[displayName.trim().lowercase()]
 
+    /** Map a Galatea / Hunting-Box shard display name to its bazaar id.
+     *  `"Power Dragon Shard"` -> `"SHARD_POWER_DRAGON"`. The items-registry
+     *  endpoint doesn't include these (it stops at the pre-Galatea era), so
+     *  [resolveItemId] returns null for them and CroesusParser's generic
+     *  uppercase synthesis ends up with `POWER_DRAGON_SHARD` (suffix instead
+     *  of prefix) — not what's on the bazaar. We strip the literal "Shard"/
+     *  "Shards" suffix, prefix with `SHARD_`, and only return the candidate
+     *  if the bazaar actually lists it. Returns null otherwise so callers fall
+     *  through to the next resolution strategy. */
+    fun resolveShardId(displayName: String): String? {
+        val trimmed = displayName.trim()
+        val withoutSuffix = when {
+            trimmed.endsWith(" Shards", ignoreCase = true) -> trimmed.dropLast(7).trim()
+            trimmed.endsWith(" Shard", ignoreCase = true)  -> trimmed.dropLast(6).trim()
+            else -> return null
+        }
+        if (withoutSuffix.isEmpty()) return null
+        val candidate = "SHARD_" + withoutSuffix.uppercase().replace(' ', '_').replace("'", "")
+        return if (bazaarSell.containsKey(candidate) || bazaarBuy.containsKey(candidate)) candidate else null
+    }
+
     /** Human-readable price, the way Hypixel itself shows coins. Comma-grouped
      *  integers for anything below 1M, then 1.23M / 1.23B / 1.23T for larger
      *  amounts so chest profits don't fill the screen with digits.
