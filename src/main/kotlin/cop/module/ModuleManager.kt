@@ -1,10 +1,14 @@
 package cop.module
 
+import cop.CopMod.logger
+import cop.api.addon.CopAddon
+import cop.api.addon.CopAddonRegistrar
 import cop.api.events.GuiEvent
 import cop.api.events.KeyEvent
 import cop.api.events.MouseEvent
 import cop.api.events.core.EventBus
 import cop.api.input.CatKeys
+import net.fabricmc.loader.api.FabricLoader
 import cop.module.impl.dungeon.cheats.*
 import cop.module.impl.dungeon.huds.*
 import cop.module.impl.dungeon.qol.*
@@ -132,6 +136,11 @@ object ModuleManager {
             GrieferTracker,
         )
 
+        // Let third-party addons contribute modules AFTER the built-ins are in
+        // place but BEFORE keybind registration + config load below, so addon
+        // modules get identical treatment (keybinds, persistence, ClickGUI).
+        loadAddons()
+
         modules.forEach { module ->
             module.keybinding.let {
                 module.register(KeybindComponent("Key bind", it, desc = "Toggles the module"))
@@ -145,6 +154,29 @@ object ModuleManager {
         EventBus.on<GuiEvent.Key.Press> { invokeKeybind(key, true) }
         EventBus.on<GuiEvent.Key.Release> { invokeKeybind(key, false) }
         EventBus.on<GuiEvent.Click> { invokeKeybind(button - 100, state) }
+    }
+
+    /** Registrar handed to each addon — appends its modules to [modules]. */
+    private val addonRegistrar = object : CopAddonRegistrar {
+        override fun register(vararg modules: Module) {
+            ModuleManager.modules += modules
+        }
+    }
+
+    /** Discover every Fabric mod that declares a `cop` entrypoint and let it
+     *  register modules. One misbehaving addon is logged + skipped rather than
+     *  aborting COP's own startup. */
+    private fun loadAddons() {
+        val containers = FabricLoader.getInstance().getEntrypointContainers("cop", CopAddon::class.java)
+        for (container in containers) {
+            val id = container.provider.metadata.id
+            try {
+                container.entrypoint.onInitialize(addonRegistrar)
+                logger.info("[cop] Loaded addon '{}'", id)
+            } catch (t: Throwable) {
+                logger.error("[cop] Addon '$id' failed to initialise — skipping", t)
+            }
+        }
     }
 
     private fun invokeKeybind(key: Int, pressed: Boolean) {

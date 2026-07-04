@@ -26,7 +26,15 @@ abstract class Module(
     val key: Int = CatKeys.KEY_NONE,
     @Transient val desc: String = "",
     toggled: Boolean = false,
-    val tag: Tag = Tag.NONE
+    val tag: Tag = Tag.NONE,
+    /** Explicit category override. COP's own modules derive it from their
+     *  package (`cop.module.impl.<category>.…`), but addon modules live in a
+     *  foreign package so package-derivation can't find one — they pass this
+     *  (or default to [Category.ADDON]). */
+    @Transient private val explicitCategory: Category? = null,
+    /** Explicit sub-category override — same rationale as [explicitCategory].
+     *  Lets an addon group its own modules under collapsible sub-headers. */
+    @Transient private val explicitSubCategory: String? = null,
 ) : SettingsDSL(), HudDSL {
     constructor(
         name: String,
@@ -35,23 +43,31 @@ abstract class Module(
         key: Int = CatKeys.KEY_NONE,
         desc: String = "",
         toggled: Boolean = false,
-        tag: Tag = Tag.NONE
-    ) : this(name, IslandArea.Base(area), subarea, key, desc, toggled, tag)
+        tag: Tag = Tag.NONE,
+        category: Category? = null,
+        subCategory: String? = null,
+    ) : this(name, IslandArea.Base(area), subarea, key, desc, toggled, tag, category, subCategory)
 
     private var isRegistered = false
 
     val events = mutableListOf<EventBus.EventListener>()
 
     @Transient
-    val category: Category = getCategory(this::class.java) ?: Category.RENDER
+    val category: Category = explicitCategory
+        ?: getCategory(this::class.java)
+        // COP's own uncategorised modules keep defaulting to RENDER for back-
+        // compat; anything outside the `cop.` package tree is an addon module,
+        // so default it into the ADDON column instead of misfiling under RENDER.
+        ?: if (this::class.java.`package`?.name?.startsWith("cop.") == true) Category.RENDER else Category.ADDON
 
-    /** Optional sub-grouping inside [category], derived from the package
-     *  segment immediately after the category name. e.g. a module at
-     *  `cop.module.impl.dungeon.cheats.AutoRCM` gets `subCategory = "cheats"`.
-     *  Flat modules (no extra sub-package) get null. Used by the ClickGUI
-     *  to render collapsible sub-headers under crowded categories. */
+    /** Optional sub-grouping inside [category]. For COP's own modules it's
+     *  derived from the package segment immediately after the category name
+     *  (e.g. a module at `cop.module.impl.dungeon.cheats.AutoRCM` gets
+     *  `subCategory = "cheats"`); addon modules pass it explicitly. Flat modules
+     *  get null. Used by the ClickGUI to render collapsible sub-headers under
+     *  crowded categories. */
     @Transient
-    val subCategory: String? = getSubCategory(this::class.java, category)
+    val subCategory: String? = explicitSubCategory ?: getSubCategory(this::class.java, category)
 
     val keybinding: Keybinding = this@Module.key.let { Keybinding(it).apply { onPress = ::onKeybind } }  // todo on press/release/hold
 
