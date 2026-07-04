@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-06-05
+
+### Added
+- **Addon-API** — COP kann jetzt Module aus *separaten* Fabric-Mods laden, ohne dass die im COP-Source-Tree leben müssen. Ein Addon deklariert einen `cop`-Entrypoint (`fabric.mod.json`) der auf eine `CopAddon`-Implementierung zeigt; COP ruft die beim Client-Init auf (nach den eigenen Modulen, vor Config-Load) und der Addon registriert seine Module via `CopAddonRegistrar.register(...)`. Addon-Module kriegen identische Behandlung: ClickGUI, Keybinds, Config-Persistenz.
+  - Neue **`ADDON`-Category** (eigene ClickGUI-Spalte) — Addon-Module landen dort per Default (alles außerhalb des `cop.`-Package-Trees), können aber via `category = ...` / `subCategory = ...` Constructor-Override woanders hin.
+  - `Module` nimmt jetzt optionale `category` / `subCategory` Overrides (vorher nur aus dem Package-Namen abgeleitet — für Fremd-Packages unmöglich).
+  - Ein Addon das beim Init crasht wird geloggt + übersprungen, reißt COP nicht mit runter.
+  - Doku: [`docs/addons.md`](docs/addons.md) mit Schritt-für-Schritt + Beispiel-Modul.
+
+### Fixed
+- **ClickGUI** crashte nicht mehr (`Exception("no good")`) wenn eine Category in einer alten Config fehlt — jetzt wird lazy ein Default-Layout gesetzt. Trat mit der neuen `ADDON`-Category auf (MapSetting.read clear()t die Map bevor es die gespeicherten Einträge putAll()t, wodurch neue Categories rausfielen).
+
 ## [1.4.4] — 2026-06-04
 
 ### Fixed

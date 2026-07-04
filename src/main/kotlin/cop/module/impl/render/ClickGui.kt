@@ -163,7 +163,15 @@ object ClickGui : Module(
         }
 
         for (category in Category.entries) {
-            val data = categoryData[category] ?: throw Exception("no good")
+            // Lazily seed a default position if this category isn't in the
+            // persisted map yet. Happens for any category added after a user's
+            // config was written (e.g. ADDON) — MapSetting.read() clear()s the
+            // map before putAll()ing the saved entries, dropping the construct-
+            // time defaults. Throwing here used to hard-crash the ClickGUI in
+            // that case.
+            val data = categoryData[category] ?: CategoryData(
+                x = 10f + 265f * category.ordinal, y = 10f, extended = true
+            ).also { categoryData[category] = it }
 
             column(at(x = data.x.px, y = data.y.px)) panel@ {
                 dropShadow(
