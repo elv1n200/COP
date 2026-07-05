@@ -335,8 +335,22 @@ object AutoClear : Module(
             val clusters = MobClusterer.getOrderedClusters(player.position(), mobs)
             if (clusters.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't cluster mobs.")
 
+            // The executor only runs a node the player is *inside* (≤0.1 away),
+            // so the queue must open with a node sitting exactly at the player's
+            // position — otherwise nothing ever matches and the path just idles.
+            // Same trick room-nav (getPath) uses: an initial "warp onto your own
+            // feet block" node from player.position().
+            var start = BlockPos(player.x, ceil(player.y - 1), player.z)
+            var dir = getEtherwarpDirection(start)
+            if (dir == null) {
+                start = start.nearbyBlocks(4f).find { it.etherwarpable && getEtherwarpDirection(it).also { d -> dir = d } != null }
+                    ?: return@launch modMessage("&cAuto Clear: no etherwarpable block to start from.")
+            }
+
             val new = mutableListOf<ClearNode>()
-            var curStand = BlockPos(player.x, ceil(player.y - 1), player.z)
+            new.add(ClearEtherNode(player.position(), dir!!.yaw, dir.pitch))
+
+            var curStand = start
 
             for (cluster in clusters) {
                 // A ground block near the cluster to cast from.
@@ -344,13 +358,15 @@ object AutoClear : Module(
                     .minByOrNull { it.vec3.distanceToSqr(curStand.vec3) } ?: continue
 
                 // Etherwarp our way over to the casting spot (skip if already there).
+                // dropLast drops the goal node — the previous warp already lands us
+                // on `stand`, then the Hyperion node casts from there.
                 if (stand != curStand) {
                     val seg = EtherwarpPathfinder.findPath(
                         start = curStand, goal = stand,
                         yawStep = yawStep, pitchStep = pitchStep, hWeight = hWeight,
                         threads = threads, timeout = timeout, offset = true, dist = 60.0
                     )
-                    seg?.forEach { node ->
+                    seg?.dropLast(1)?.forEach { node ->
                         new.add(ClearEtherNode(node.pos.center.addVec(y = 0.5), node.yaw, node.pitch))
                     }
                 }
@@ -364,7 +380,7 @@ object AutoClear : Module(
                 curStand = cluster.pos
             }
 
-            if (new.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")
+            if (new.size <= 1) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")
 
             nodes = new
             position = null

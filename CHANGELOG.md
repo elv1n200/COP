@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear tat nichts** obwohl der Pfad gebaut wurde ("7 casts for 20 mobs"). Der Executor führt nur einen Node aus in dem der Spieler `inside` steht (≤0.1 entfernt) — mein erster Node saß am Pathfinder-Startblock statt exakt an `player.position()`, also matchte kein Node und die Queue idlte. Jetzt öffnet `clearMobs` mit dem gleichen initialen „warp-to-feet"-Node den die Room-Nav nutzt. Segmente droppen zusätzlich den Goal-Node (der vorherige Warp landet schon auf dem Cast-Spot).
+
 ## [1.6.1] — 2026-07-05
 
 ### Fixed
