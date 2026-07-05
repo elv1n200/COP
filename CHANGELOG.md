@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.4] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear brach immer noch nach ein paar Casts ab.** Grund war das Landepunkt-Modell: COP hatte keine echte Transmission-Physik, also musste der Hype-Node raten (bzw. Etherwarp-Physik nutzen), wo Wither Impact dich hinteleportiert. Weicht der simulierte Landepunkt vom echten ab, desynkt die Node-Queue vom Spieler → nächster Etherwarp failt. quoi's `predictTransmission` (DDA-Voxel-Raycast der Kopf+Füße-Kollision entlang des Look-Rays checkt) nach COP portiert (mit COPs `blockFlags`-Kollisionsmodell), neuer `Vec3.getTeleportPos(yaw, pitch, dist)`. Der Hype-Node berechnet jetzt den *echten* Transmission-Landepunkt und setzt den als sein Ziel + als Start fürs nächste Segment — Queue bleibt in Sync.
+
 ## [1.6.3] — 2026-07-05
 
 ### Fixed
