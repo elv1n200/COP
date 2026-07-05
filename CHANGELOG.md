@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-07-04
+
+### Added
+- **Auto Clear — Auto-Mob-Clear mit Hyperion** (experimentell). Bisher hat AutoClear nur von Raum zu Raum teleportiert; jetzt kann es die Starred-Mobs im aktuellen Raum auto-killen. Portiert + adaptiert aus quoi (pigeonlover1998, schon in CREDITS):
+  - **`MobClusterer`** — gruppiert Starred-Mobs in die wenigsten Hyperion-Casts (Centroid-Recompute, jeder Mob joint nur wenn der ganze Cluster in der `HYPE_AOE` bleibt), dann Nearest-Neighbour-Ordering für einen kurzen Weg.
+  - **Node-Hierarchie**: COPs monolithischer `ClearNode` (nur Etherwarp) ist jetzt eine kleine Hierarchie — `ClearEtherNode` (AOTV, sneak) + `ClearHypeNode` (Wither-Blade Cast, kein sneak). Der Executor swappt per-Node das richtige Item + gated Sneak nur für Etherwarp.
+  - **Neuer Keybind „Clear mobs key"** (default unbelegt): scannt die Starred-Mobs (nutzt DungeonESPs `✯`-Erkennung, jetzt als `scanStarredMobs()` exposed), clustert + ordnet sie, baut einen Pfad (Etherwarp zum Cast-Spot → Hyperion-Cast pro Cluster) und fährt ihn ab.
+  - Hype-Cast kriegt `hypeDelay` (3t) damit der Wither-Impact-Teleport sich setzt bevor der nächste Node-Check läuft.
+
+### Fixed
+- **DungeonESP**: Starred-Mob-Resolver aus `handleStand` in eine pure `resolveStarredEntity` extrahiert, damit ESP + Auto-Clear dieselbe Detection teilen.
+
 ## [1.5.0] — 2026-06-05
 
 ### Added

@@ -18,6 +18,8 @@ import cop.api.skyblock.dungeon.Dungeon.inClear
 import cop.api.skyblock.dungeon.Dungeon.isDead
 import cop.api.skyblock.dungeon.odonscanning.MapRenderer
 import cop.api.skyblock.dungeon.odonscanning.MapRenderer.renderMap
+import cop.module.impl.dungeon.cheats.autoclear.MobClusterer
+import cop.module.impl.dungeon.worldrender.DungeonESP
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomComponent
 import cop.api.skyblock.dungeon.odonscanning.tiles.Rotations
@@ -77,6 +79,11 @@ object AutoClear : Module(
 
     private val closeOn by segmented("Close on", "Release", listOf("Release", "Repress"))
 
+    private val clearMobsKey by keybind("Clear mobs key", desc = "Auto-clears the starred mobs in the current room with Hyperion (experimental).")
+        .onPress {
+            if (enabled && inClear && !isDead) clearMobs()
+        }
+
     private val visuals by text("Visuals")
     private val shadow by switch("Shadow", true).childOf(::visuals).asParent()
     private val font by segmented("Font", TextHud.HudFont.Minecraft).childOf(::visuals)
@@ -108,6 +115,7 @@ object AutoClear : Module(
 
     private var delay = 0
     private var postDelay = 0
+    private var hypeDelay = 0
     var active = false
         private set
 
@@ -163,6 +171,8 @@ object AutoClear : Module(
                 pending = null
             }
 
+            if (hypeDelay > 0) hypeDelay--
+
             if (postDelay > 0) {
                 if (--postDelay == 0) active = false
             }
@@ -184,6 +194,9 @@ object AutoClear : Module(
 
         on<KeyEvent.Input> {
             if (!active) return@on
+            // Only etherwarp needs sneak held; forcing it during a Hyperion cast
+            // would just keep us crouched. Gate on the next node's type.
+            if (nodes?.firstOrNull() !is ClearEtherNode) return@on
             val old = clientInput
 
             val new = Input(
@@ -205,6 +218,7 @@ object AutoClear : Module(
             position = null
             active = false
             postDelay = 0
+            hypeDelay = 0
         }
     }
 
@@ -213,8 +227,14 @@ object AutoClear : Module(
 
         if (index < 0) return false
 
-        if (player.mainHandItem.skyblockId != "ASPECT_OF_THE_VOID") {
-            if (!SwapManager.swapById("ASPECT_OF_THE_VOID").success) {
+        val node = nodes[index]
+
+        // Let the Wither-Impact teleport settle a few ticks before the next
+        // node's position check runs, so we don't stall on the desync.
+        if (node is ClearHypeNode && hypeDelay > 0) return false
+
+        if (player.mainHandItem.skyblockId !in node.items) {
+            if (!SwapManager.swapById(*node.items).success) {
                 this.nodes = null
                 position = null
             }
@@ -222,10 +242,10 @@ object AutoClear : Module(
         }
 
         active = true
-        val node = nodes[index]
 
         if (node.execute(stupid)) {
             nodes.removeAt(index)
+            if (node is ClearHypeNode) hypeDelay = 3
             if (nodes.isEmpty()) {
                 this.nodes = null
                 position = null
@@ -280,11 +300,11 @@ object AutoClear : Module(
 
             val new = mutableListOf<ClearNode>()
 
-            new.add(ClearNode(player.position(), dir!!.yaw, dir.pitch))
+            new.add(ClearEtherNode(player.position(), dir!!.yaw, dir.pitch))
 
             new.addAll(p.dropLast(1).map { node ->
                 val pos = node.pos.center.addVec(y = 0.5)
-                ClearNode(pos, node.yaw, node.pitch)
+                ClearEtherNode(pos, node.yaw, node.pitch)
             }.toMutableList())
 
             nodes = new
@@ -293,6 +313,64 @@ object AutoClear : Module(
             pending = null
         }
 
+    }
+
+    /**
+     * Auto-clears the current room's starred mobs with Hyperion. Scans the
+     * starred mobs (via [DungeonESP.scanStarredMobs]), groups them into the
+     * fewest wither-blade casts ([MobClusterer]), then builds a node path:
+     * etherwarp to a standing spot near each cluster, then a Hyperion cast at it.
+     *
+     * Experimental — the inter-cluster pathing reuses the room-nav pathfinder and
+     * will want tuning from real dungeon testing.
+     */
+    fun clearMobs() {
+        if (!player.onGround()) return
+        if (currentRoom?.name?.containsOneOf("Maze", "Boulder") == true) return
+
+        val mobs = DungeonESP.scanStarredMobs()
+        if (mobs.isEmpty()) return modMessage("&cAuto Clear: no starred mobs found.")
+
+        scope.launch {
+            val clusters = MobClusterer.getOrderedClusters(player.position(), mobs)
+            if (clusters.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't cluster mobs.")
+
+            val new = mutableListOf<ClearNode>()
+            var curStand = BlockPos(player.x, ceil(player.y - 1), player.z)
+
+            for (cluster in clusters) {
+                // A ground block near the cluster to cast from.
+                val stand = cluster.pos.nearbyBlocks(8f) { it.etherwarpable && it.state.block != Blocks.REDSTONE_BLOCK }
+                    .minByOrNull { it.vec3.distanceToSqr(curStand.vec3) } ?: continue
+
+                // Etherwarp our way over to the casting spot (skip if already there).
+                if (stand != curStand) {
+                    val seg = EtherwarpPathfinder.findPath(
+                        start = curStand, goal = stand,
+                        yawStep = yawStep, pitchStep = pitchStep, hWeight = hWeight,
+                        threads = threads, timeout = timeout, offset = true, dist = 60.0
+                    )
+                    seg?.forEach { node ->
+                        new.add(ClearEtherNode(node.pos.center.addVec(y = 0.5), node.yaw, node.pitch))
+                    }
+                }
+
+                // Cast Hyperion at the cluster from the standing spot.
+                val eye = stand.center.addVec(y = getEyeHeight(false).toDouble())
+                val target = Vec3.atCenterOf(cluster.pos).add(0.0, 1.0, 0.0)
+                val aim = getDirection(eye, target)
+                new.add(ClearHypeNode(stand.center.addVec(y = 0.5), aim.yaw, aim.pitch))
+
+                curStand = cluster.pos
+            }
+
+            if (new.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")
+
+            nodes = new
+            position = null
+            pending = null
+            modMessage("&aAuto Clear: ${clusters.size} cast(s) for ${mobs.size} mob(s).")
+        }
     }
 
     private fun map() = aboba("cop clear map") {
@@ -325,7 +403,18 @@ object AutoClear : Module(
 
     private data class Stupid(var x: Double, var y: Double, var z: Double)
 
-    private data class ClearNode(val pos: Vec3, val yaw: Float, val pitch: Float) {
+    /**
+     * One teleport in a clear path. Was an etherwarp-only data class; now a tiny
+     * hierarchy so the executor can mix AOTV etherwarps ([ClearEtherNode]) with
+     * Hyperion/wither-blade casts ([ClearHypeNode]) for auto-mob-clearing.
+     */
+    private abstract class ClearNode(val pos: Vec3, val yaw: Float, val pitch: Float) {
+        /** Skyblock ids this node can teleport with — first held one is used. */
+        abstract val items: Array<String>
+        /** Whether the teleport is held while sneaking (etherwarp yes, Wither-Impact no). */
+        abstract val sneak: Boolean
+        /** Where the teleport lands, or null if it can't resolve (aborts the path). */
+        abstract fun landing(from: Vec3): BlockPos?
 
         fun inside(stupid: Stupid): Boolean {
             val dx = pos.x - stupid.x
@@ -335,26 +424,43 @@ object AutoClear : Module(
         }
 
         fun execute(stupid: Stupid): Boolean {
-            if (player.mainHandItem.skyblockId != "ASPECT_OF_THE_VOID") return false
-            if (!player.lastSentInput.shift) return false
+            if (player.lastSentInput.shift != sneak) return false
 
-            val from = Vec3(stupid.x, stupid.y + getEyeHeight(true), stupid.z)
-            val ether = from.getEtherPos(yaw, pitch)
+            val from = Vec3(stupid.x, stupid.y + getEyeHeight(sneak), stupid.z)
+            val land = landing(from)
 
-            if (!ether.succeeded || ether.pos == null) {
+            if (land == null) {
                 nodes = null
                 position = null
                 postDelay = 2
-                modMessage("failed from &c$from &e$yaw $pitch &d$ether")
+                modMessage("failed from &c$from &e$yaw $pitch")
                 return false
             }
 
             pending = Direction(yaw, pitch)
 
-            stupid.x = ether.pos.x + 0.5
-            stupid.y = ether.pos.y + 1.05
-            stupid.z = ether.pos.z + 0.5
+            stupid.x = land.x + 0.5
+            stupid.y = land.y + 1.05
+            stupid.z = land.z + 0.5
             return true
         }
+    }
+
+    /** AOTV etherwarp — sneak + right-click onto a solid block along the aim. */
+    private class ClearEtherNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
+        override val items = arrayOf("ASPECT_OF_THE_VOID")
+        override val sneak = true
+        override fun landing(from: Vec3): BlockPos? =
+            from.getEtherPos(yaw, pitch).takeIf { it.succeeded }?.pos
+    }
+
+    /** Wither-blade (Hyperion / Astrea / Scylla / Valkyrie) — right-click casts
+     *  Wither Impact: a ≤10-block transmit toward the aim plus an AOE that kills
+     *  the mobs clustered at the landing. */
+    private class ClearHypeNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
+        override val items = arrayOf("HYPERION", "ASTREA", "SCYLLA", "VALKYRIE")
+        override val sneak = false
+        override fun landing(from: Vec3): BlockPos? =
+            from.getEtherPos(yaw, pitch, 10.0).takeIf { it.succeeded }?.pos
     }
 }
