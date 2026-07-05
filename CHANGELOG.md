@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear „pathfind failed on a cluster"** bei Mobs direkt neben dem Spieler. Der Transmission-A* verlangte exaktes Landen auf dem Ziel-Block, aber eine Transmission überschießt flache Ziele auf gleicher Höhe (horizontal stoppt nichts den Ray). Zwei Fixes: (1) `≤10` Blöcke Distanz → Hype wird direkt in-place gecastet (kein Pathfinding, ein Wither Impact AOEt den Cluster eh), (2) neue Radius-Toleranz im `TransmissionPathfinder` (Mid-Range nutzt jetzt 2-Block-Radius statt exaktes Landen).
+
 ## [1.7.0] — 2026-07-05
 
 ### Added / Changed
