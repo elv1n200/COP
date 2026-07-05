@@ -112,24 +112,34 @@ object DungeonESP : Module(
     }
 
     private fun handleStand(stand: ArmorStand) {
-        val name = stand.customName?.string ?: return
-        if ("✯" !in name && !name.endsWith("§c❤")) return
+        resolveStarredEntity(stand)?.let { currentEntities.add(EspMob(it, colourStar, colourStarFill)) }
+    }
+
+    /** Resolves the actual starred [LivingEntity] behind a `✯` / `§c❤` armour
+     *  stand nameplate (id-offset first, then the entity in the box just below).
+     *  Pure — returns the entity instead of mutating [currentEntities] — so both
+     *  the ESP loop and [scanStarredMobs] can share the detection logic. */
+    private fun resolveStarredEntity(stand: ArmorStand): LivingEntity? {
+        val name = stand.customName?.string ?: return null
+        if ("✯" !in name && !name.endsWith("§c❤")) return null
 
         val offset = if (name.noControlCodes.contains("withermancer", true)) 3 else 1
         val realId = stand.id - offset
 
-        stand.level().getEntity(realId)?.takeIf { it is LivingEntity && it !is ArmorStand }?.let {
-            currentEntities.add(EspMob(it as LivingEntity, colourStar, colourStarFill))
-            return
+        (stand.level().getEntity(realId))?.takeIf { it is LivingEntity && it !is ArmorStand }?.let {
+            return it as LivingEntity
         }
 
-
-        stand.level().getEntities(stand, stand.boundingBox.move(0.0, -1.0, 0.0)) {
+        return stand.level().getEntities(stand, stand.boundingBox.move(0.0, -1.0, 0.0)) {
             it !is ArmorStand && it is LivingEntity && it != player
-        }.firstOrNull()?.let {
-            currentEntities.add(EspMob(it as LivingEntity, colourStar, colourStarFill))
-        }
+        }.firstOrNull() as? LivingEntity
     }
+
+    /** On-demand scan of every starred mob in the current room, independent of
+     *  the ESP toggle / render loop. Used by Auto Clear's mob-clearing to feed
+     *  the [MobClusterer]. */
+    fun scanStarredMobs(): List<LivingEntity> =
+        getEntities<ArmorStand>().mapNotNull { resolveStarredEntity(it) }.distinct().toList()
 
     private fun getColour(entity: Entity) = when (entity) {
         is Bat if (entity.maxHealth.equalsOneOf(100f, 200f, 400f, 800f)) -> colourBat to colourBatFill
