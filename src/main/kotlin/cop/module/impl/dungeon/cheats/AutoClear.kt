@@ -458,7 +458,7 @@ object AutoClear : Module(
      *  Wither Impact: a ≤10-block transmit toward the aim plus an AOE that kills
      *  the mobs clustered at the landing. */
     private class ClearHypeNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
-        override val items = arrayOf("HYPERION", "ASTREA", "SCYLLA", "VALKYRIE")
+        override val items = arrayOf("HYPERION", "ASTRAEA", "SCYLLA", "VALKYRIE")
         override val sneak = false
         override fun landing(from: Vec3): BlockPos? =
             from.getEtherPos(yaw, pitch, 10.0).takeIf { it.succeeded }?.pos

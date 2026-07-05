@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear**: Hyperion/Astraea-Cast blockte mit „Could not find HYPERION, ASTREA, …" obwohl die Waffe in der Hand war — die Skyblock-ID von Astraea ist `ASTRAEA`, nicht `ASTREA` (Typo aus quoi übernommen). Clustering + Pathing lief schon korrekt, nur der Item-Match schlug fehl.
+
 ## [1.6.0] — 2026-07-04
 
 ### Added
