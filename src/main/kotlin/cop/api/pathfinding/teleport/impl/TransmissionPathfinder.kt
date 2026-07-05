@@ -32,10 +32,11 @@ object TransmissionPathfinder : AbstractTeleportPathfinder<TransmissionContext>(
         dist: Double = 12.0,
         ground: Boolean = true,
         withLast: Boolean = false,
+        radius: Double = 0.0,
     ): List<TeleportPathNode>? {
         val raycasts = getRaycasts(config.pitchStep, config.yawStep)
         val actualGoal = to.above()
-        val ctx = TransmissionContext(actualGoal, dist, config.hWeight, raycasts, config.timeout, ground)
+        val ctx = TransmissionContext(actualGoal, dist, config.hWeight, raycasts, config.timeout, ground, radius * radius)
         val startPos = BlockPos.containing(from.x, from.y, from.z)
 
         ctx.addNode(TeleportPathNode(from.x, from.y, from.z, startPos, 0.0, startPos.distanceTo(actualGoal) / dist, null, 0f, 0f))
@@ -51,6 +52,11 @@ object TransmissionPathfinder : AbstractTeleportPathfinder<TransmissionContext>(
             if (config.feedback) modMessage("&cFailed &rafter ${System.currentTimeMillis() - ctx.startTime}ms (${ctx.processed.get()}).")
             null
         }
+    }
+
+    override fun isGoal(ctx: TransmissionContext, current: TeleportPathNode): Boolean {
+        if (ctx.radius > 0.0) return current.pos.distSqr(ctx.goal) <= ctx.radius
+        return current.pos == ctx.goal
     }
 
     override fun getDirection(from: Vec3, to: BlockPos, dist: Double): Direction? =

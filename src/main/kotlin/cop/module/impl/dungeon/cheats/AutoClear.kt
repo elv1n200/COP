@@ -361,9 +361,22 @@ object AutoClear : Module(
                 val nWord = to.center.addVec(y = 0.5)
                 val dist = currPos.distanceTo(toVec)
 
+                // Within one cast: aim at the cluster and fire in place, no path.
+                // A transmission A* can't land exactly on a flat, same-level target
+                // a few blocks away (nothing stops the ray horizontally, so it
+                // overshoots), which is why pathfinding this last stretch failed.
+                // A single Wither Impact still AOEs the cluster.
+                if (dist <= 10.0) {
+                    val eye = Vec3(currPos.x, currPos.y + getEyeHeight(false), currPos.z)
+                    val aim = getDirection(eye, Vec3.atCenterOf(to).add(0.0, 1.0, 0.0))
+                    new.add(ClearHypeNode(currPos, aim.yaw, aim.pitch))
+                    currPos = nWord
+                    continue
+                }
+
                 val segment = when {
                     dist > 36.0 -> TeleportEtherwarpPathfinder.findPath(currPos, to, config, withLast = true)
-                    else -> TransmissionPathfinder.findPath(currPos, to, config, dist = if (dist > 10.0) 12.0 else 10.0)
+                    else -> TransmissionPathfinder.findPath(currPos, to, config, dist = 12.0, radius = 2.0)
                 }
 
                 if (segment.isNullOrEmpty()) return@launch modMessage("&cAuto Clear: pathfind failed on a cluster.")
@@ -371,21 +384,17 @@ object AutoClear : Module(
                 val last = segment.last()
                 val body = segment.dropLast(1)
 
-                when {
-                    dist > 36.0 -> {
-                        new.addAll(body.map { it.toEther() })
-                        new.add(last.toRotHype())
+                if (dist > 36.0) {
+                    new.addAll(body.map { it.toEther() })
+                    new.add(last.toRotHype())
+                } else {
+                    new.addAll(body.map { it.toAotv() })
+                    if (last.vec.distanceTo(toVec) > 10.0) {
+                        new.add(last.toAotv())
+                        new.add(last.toRotHype(to, nWord.x, nWord.y, nWord.z))
+                    } else {
+                        new.add(last.toHype())
                     }
-                    dist > 10.0 -> {
-                        new.addAll(body.map { it.toAotv() })
-                        if (last.vec.distanceTo(toVec) > 10.0) {
-                            new.add(last.toAotv())
-                            new.add(last.toRotHype(to, nWord.x, nWord.y, nWord.z))
-                        } else {
-                            new.add(last.toHype())
-                        }
-                    }
-                    else -> new.addAll(segment.map { it.toHype() })
                 }
 
                 currPos = nWord

@@ -20,6 +20,11 @@ class TransmissionContext(
     raycasts: Raycasts,
     timeout: Long,
     val ground: Boolean,
+    /** Squared block radius around [goal] that counts as reaching it. 0 = exact.
+     *  A transmission overshoots flat same-level targets (nothing stops the ray
+     *  horizontally), so an exact landing on the goal block is often impossible;
+     *  a small tolerance lets the search accept a landing next to it. */
+    val radius: Double = 0.0,
 ) : TeleportContext(goal, dist, hWeight, raycasts, timeout) {
 
     override fun addNode(node: TeleportPathNode) {
