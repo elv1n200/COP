@@ -371,11 +371,13 @@ object AutoClear : Module(
                     }
                 }
 
-                // Cast Hyperion at the cluster from the standing spot.
+                // Cast Hyperion at the cluster from the standing spot. We land
+                // on the cluster ground itself (dest), which is where the next
+                // segment is pathfound from — keeps the simulated queue in sync.
                 val eye = stand.center.addVec(y = getEyeHeight(false).toDouble())
                 val target = Vec3.atCenterOf(cluster.pos).add(0.0, 1.0, 0.0)
                 val aim = getDirection(eye, target)
-                new.add(ClearHypeNode(stand.center.addVec(y = 0.5), aim.yaw, aim.pitch))
+                new.add(ClearHypeNode(stand.center.addVec(y = 0.5), aim.yaw, aim.pitch, cluster.pos))
 
                 curStand = cluster.pos
             }
@@ -470,13 +472,19 @@ object AutoClear : Module(
             from.getEtherPos(yaw, pitch).takeIf { it.succeeded }?.pos
     }
 
-    /** Wither-blade (Hyperion / Astrea / Scylla / Valkyrie) — right-click casts
+    /** Wither-blade (Hyperion / Astraea / Scylla / Valkyrie) — right-click casts
      *  Wither Impact: a ≤10-block transmit toward the aim plus an AOE that kills
-     *  the mobs clustered at the landing. */
-    private class ClearHypeNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
+     *  the mobs clustered there.
+     *
+     *  Unlike etherwarp, Wither Impact is a transmission — it drops you where you
+     *  aim (in air), it does NOT need a solid block to warp onto. So the landing
+     *  is the cluster spot passed in at build time ([dest]); resolving it with an
+     *  etherwarp raycast is wrong and used to abort the path right after the first
+     *  cast ("failed from …"). Returning [dest] always keeps the simulated queue
+     *  in sync with the next segment, which is pathfound from that same spot. */
+    private class ClearHypeNode(pos: Vec3, yaw: Float, pitch: Float, private val dest: BlockPos) : ClearNode(pos, yaw, pitch) {
         override val items = arrayOf("HYPERION", "ASTRAEA", "SCYLLA", "VALKYRIE")
         override val sneak = false
-        override fun landing(from: Vec3): BlockPos? =
-            from.getEtherPos(yaw, pitch, 10.0).takeIf { it.succeeded }?.pos
+        override fun landing(from: Vec3): BlockPos = dest
     }
 }
