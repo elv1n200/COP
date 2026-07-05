@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.5] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear failte mit „0.0 0.0"** bei nah beieinander liegenden Clustern. `EtherwarpPathfinder.smoothPath` bricht bei `size <= 2` ab und gibt den Pfad ungeglättet zurück — der Start-Node behält dann `yaw=0/pitch=0`. Kurze Segmente (Cluster nur ein Etherwarp entfernt) landeten so mit einem (0,0)-Node in der Queue, der `getEtherPos(0,0)` failt. Jetzt wird für (0,0)-Nodes eine echte Etherwarp-Richtung zum Cast-Spot nachberechnet.
+
 ## [1.6.4] — 2026-07-05
 
 ### Fixed
