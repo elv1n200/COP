@@ -367,7 +367,19 @@ object AutoClear : Module(
                         threads = threads, timeout = timeout, offset = true, dist = 60.0
                     )
                     seg?.dropLast(1)?.forEach { node ->
-                        new.add(ClearEtherNode(node.pos.center.addVec(y = 0.5), node.yaw, node.pitch))
+                        var yaw = node.yaw
+                        var pitch = node.pitch
+                        // Short segments (<=2 nodes) come back unsmoothed with the
+                        // start node still at (0,0) — smoothPath bails on `size<=2`.
+                        // Recompute a real etherwarp direction to the cast spot so
+                        // the node doesn't fail on getEtherPos(0,0).
+                        if (yaw == 0f && pitch == 0f) {
+                            val eye = Vec3(node.pos.x + 0.5, node.pos.y + 1.05 + getEyeHeight(true), node.pos.z + 0.5)
+                            val fixed = getEtherwarpDirection(eye, stand) ?: return@forEach
+                            yaw = fixed.yaw
+                            pitch = fixed.pitch
+                        }
+                        new.add(ClearEtherNode(node.pos.center.addVec(y = 0.5), yaw, pitch))
                     }
                 }
 
