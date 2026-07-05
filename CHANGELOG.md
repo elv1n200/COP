@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.3] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear stoppte nach dem ersten Hyperion-Cast** ("failed from …"). Der Hype-Node berechnete seinen Landepunkt mit `getEtherPos` — das ist Etherwarp-Physik (braucht Solid-Block zum drauf-warpen). Wither Impact ist aber Transmission (teleportiert dich dahin wo du zielst, in die Luft), also lieferte das den falschen Landepunkt, der Executor desynkte und der nächste Node failte. Der Hype-Node kennt jetzt sein Ziel (den Cluster) explizit und gibt das als Landing zurück — bleibt in Sync mit dem nächsten Segment das von genau dem Spot gepathfindet wird.
+
 ## [1.6.2] — 2026-07-05
 
 ### Fixed
