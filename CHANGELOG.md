@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-07-05
+
+### Added / Changed
+- **Auto Clear Mob-Clear — kompletter faithful Port von quoi's Teleport-Pathfinding-Stack.** Meine adaptierte Etherwarp-only-Version konvergierte nicht (jede Iteration ein neuer Edge-Case, und die Routen waren „naja" weil Etherwarp dich auf komische Blöcke landet statt flüssig zu transmitten). Jetzt hat COP quoi's echte Machinerie:
+  - Neues Paket `cop.api.pathfinding.teleport`: `TeleportPathNode` (fraktionale Koordinaten), `AbstractTeleportPathfinder` (A*-Teleport-Base mit `getHit`/`getDirection`/`getSneak`/`getNodeY` Hooks + Node-Expansion + Path-Smoothing), `Raycasts`/`generateRaycasts`, `PathConfig`, `TeleportContext`/`EtherwarpContext`/`TransmissionContext`.
+  - **`TransmissionPathfinder`** — A* über AOTV/AOTE Instant-Transmission (~12 Blöcke, kein Sneak, landet in der Luft). `getVisiblePoint` + `getTransmissionDirection` in VecUtils ergänzt.
+  - **`TeleportEtherwarpPathfinder`** — dieselbe Base für Etherwarp (~60 Blöcke, Sneak), gibt `TeleportPathNode` zurück, damit Mob-Clear beide Pathfinder uniform mischen kann.
+  - **Node-Hierarchie**: `ClearEtherNode` (Etherwarp) / `ClearAotvNode` (Transmission 12) / `ClearHypeNode` (Wither Impact 10) — jeder mit korrekter Physik + per-Node yOffset.
+  - **`clearMobs`** = quoi's `pathToMobs` 1:1: Distanz-basierte Pathfinder-Auswahl (>36 Etherwarp, 10–36 Transmission, ≤10 direkt Hype) + Node-Converter (`toEther`/`toAotv`/`toHype`/`toRotHype`).
+  - COPs bestehender Room-Nav-`EtherwarpPathfinder` bleibt unangetastet (kein Regressions-Risiko).
+  - `PathContext.addNode` ist jetzt `open` (für `TransmissionContext`'s Ground-Penalty).
+
 ## [1.6.5] — 2026-07-05
 
 ### Fixed
