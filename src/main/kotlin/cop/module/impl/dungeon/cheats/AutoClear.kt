@@ -353,13 +353,29 @@ object AutoClear : Module(
                 threads = threads, timeout = timeout, feedback = false,
             )
             val new = mutableListOf<ClearNode>()
-            var currPos = from
+
+            // The executor chains purely on its simulated position — each node must
+            // sit exactly where the previous one lands. So we track [simPos] the
+            // same way the executor will (advance it by each node's real landing)
+            // and pathfind / aim every segment from it. Setting the next segment's
+            // start to a guessed spot (the cluster centre) was the desync that
+            // stopped the clear after one cast.
+            var simPos = from
+
+            fun push(node: ClearNode) {
+                new.add(node)
+                val eye = Vec3(simPos.x, simPos.y + getEyeHeight(node.sneak), simPos.z)
+                val res = node.raycast(eye)
+                if (res.succeeded && res.pos != null) {
+                    simPos = Vec3(res.pos.x + 0.5, res.pos.y + node.yOff, res.pos.z + 0.5)
+                }
+            }
 
             for (cluster in clusters) {
                 val to = cluster.pos
                 val toVec = to.vec3
                 val nWord = to.center.addVec(y = 0.5)
-                val dist = currPos.distanceTo(toVec)
+                val dist = simPos.distanceTo(toVec)
 
                 // Within one cast: aim at the cluster and fire in place, no path.
                 // A transmission A* can't land exactly on a flat, same-level target
@@ -367,16 +383,15 @@ object AutoClear : Module(
                 // overshoots), which is why pathfinding this last stretch failed.
                 // A single Wither Impact still AOEs the cluster.
                 if (dist <= 10.0) {
-                    val eye = Vec3(currPos.x, currPos.y + getEyeHeight(false), currPos.z)
+                    val eye = Vec3(simPos.x, simPos.y + getEyeHeight(false), simPos.z)
                     val aim = getDirection(eye, Vec3.atCenterOf(to).add(0.0, 1.0, 0.0))
-                    new.add(ClearHypeNode(currPos, aim.yaw, aim.pitch))
-                    currPos = nWord
+                    push(ClearHypeNode(simPos, aim.yaw, aim.pitch))
                     continue
                 }
 
                 val segment = when {
-                    dist > 36.0 -> TeleportEtherwarpPathfinder.findPath(currPos, to, config, withLast = true)
-                    else -> TransmissionPathfinder.findPath(currPos, to, config, dist = 12.0, radius = 2.0)
+                    dist > 36.0 -> TeleportEtherwarpPathfinder.findPath(simPos, to, config, withLast = true)
+                    else -> TransmissionPathfinder.findPath(simPos, to, config, dist = 12.0, radius = 2.0)
                 }
 
                 if (segment.isNullOrEmpty()) return@launch modMessage("&cAuto Clear: pathfind failed on a cluster.")
@@ -385,19 +400,17 @@ object AutoClear : Module(
                 val body = segment.dropLast(1)
 
                 if (dist > 36.0) {
-                    new.addAll(body.map { it.toEther() })
-                    new.add(last.toRotHype())
+                    body.forEach { push(it.toEther()) }
+                    push(last.toRotHype())
                 } else {
-                    new.addAll(body.map { it.toAotv() })
+                    body.forEach { push(it.toAotv()) }
                     if (last.vec.distanceTo(toVec) > 10.0) {
-                        new.add(last.toAotv())
-                        new.add(last.toRotHype(to, nWord.x, nWord.y, nWord.z))
+                        push(last.toAotv())
+                        push(last.toRotHype(to, nWord.x, nWord.y, nWord.z))
                     } else {
-                        new.add(last.toHype())
+                        push(last.toHype())
                     }
                 }
-
-                currPos = nWord
             }
 
             if (new.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")

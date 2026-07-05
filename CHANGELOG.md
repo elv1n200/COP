@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] — 2026-07-05
+
+### Fixed
+- **Auto Clear Mob-Clear stoppte nach einem Hype/TP** ("ein Angriff und dann nix"). Der Executor chained rein über die *simulierte* Position — jeder Node muss exakt auf dem Landepunkt des vorherigen sitzen. Zwischen Clustern habe ich den nächsten Segment-Start auf die Cluster-Mitte (`nWord`) geraten, aber der Hype landet via `predictTransmission` woanders (überschießt bei flachen Zielen), also matchte der nächste Node nicht → Stopp. Jetzt wird eine `simPos` exakt wie im Executor mitgeführt (jeder Node → sein echter vorhergesagter Landepunkt) und alle Segmente/Casts werden von dort gepathfindet — die Kette bleibt synchron.
+
 ## [1.7.1] — 2026-07-05
 
 ### Fixed
