@@ -371,15 +371,19 @@ object AutoClear : Module(
                     }
                 }
 
-                // Cast Hyperion at the cluster from the standing spot. We land
-                // on the cluster ground itself (dest), which is where the next
-                // segment is pathfound from — keeps the simulated queue in sync.
+                // Cast Hyperion at the cluster from the standing spot. Wither
+                // Impact is a transmission — predict where it ACTUALLY drops us
+                // (predictTransmission), not where we aim, so the simulated queue
+                // and the real player stay in sync for the next segment. Using
+                // the aim target or an etherwarp raycast here was the desync that
+                // aborted the clear after the first cast.
                 val eye = stand.center.addVec(y = getEyeHeight(false).toDouble())
                 val target = Vec3.atCenterOf(cluster.pos).add(0.0, 1.0, 0.0)
                 val aim = getDirection(eye, target)
-                new.add(ClearHypeNode(stand.center.addVec(y = 0.5), aim.yaw, aim.pitch, cluster.pos))
+                val dest = eye.getTeleportPos(aim.yaw, aim.pitch, 10.0).pos ?: cluster.pos
+                new.add(ClearHypeNode(stand.center.addVec(y = 0.5), aim.yaw, aim.pitch, dest))
 
-                curStand = cluster.pos
+                curStand = dest
             }
 
             if (new.size <= 1) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")

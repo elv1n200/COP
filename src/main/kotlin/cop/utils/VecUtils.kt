@@ -697,6 +697,108 @@ fun traverseVoxels(from: Vec3, to: Vec3, etherwarp: Boolean): EtherPos {
     return traverseVoxels(x0, y0, z0, x1, y1, z1, etherwarp)
 }
 
+/**
+ * Predicts where an Instant-Transmission-style teleport (Hyperion / wither-blade
+ * Wither Impact, AOTV transmission) lands, following the look ray up to
+ * [distance] blocks and returning the last position where the 2-block player
+ * hitbox (feet + head) still fits — i.e. where you actually end up.
+ *
+ * Unlike [traverseVoxels] with `etherwarp = true` (which returns the *solid
+ * block you warp onto*), this returns the *air standing spot* you transmit into.
+ * Ported from quoi's `predictTransmission` (pigeonlover1998), adapted to COP's
+ * [blockFlags] passability model.
+ */
+fun predictTransmission(x0: Double, y0: Double, z0: Double, dx: Double, dy: Double, dz: Double, distance: Double): EtherPos {
+    var x = floor(x0)
+    var y = floor(y0)
+    var z = floor(z0)
+
+    val x1 = x0 + dx * distance
+    val y1 = y0 + dy * distance
+    val z1 = z0 + dz * distance
+
+    val endX = floor(x1)
+    val endY = floor(y1)
+    val endZ = floor(z1)
+
+    val dirX = x1 - x0
+    val dirY = y1 - y0
+    val dirZ = z1 - z0
+
+    val stepX = sign(dirX).toInt()
+    val stepY = sign(dirY).toInt()
+    val stepZ = sign(dirZ).toInt()
+
+    val invDirX = if (dirX != 0.0) 1.0 / dirX else Double.MAX_VALUE
+    val invDirY = if (dirY != 0.0) 1.0 / dirY else Double.MAX_VALUE
+    val invDirZ = if (dirZ != 0.0) 1.0 / dirZ else Double.MAX_VALUE
+
+    val tDeltaX = abs(invDirX * stepX)
+    val tDeltaY = abs(invDirY * stepY)
+    val tDeltaZ = abs(invDirZ * stepZ)
+
+    var tMaxX = abs((x + max(stepX, 0) - x0) * invDirX)
+    var tMaxY = abs((y + max(stepY, 0) - y0) * invDirY)
+    var tMaxZ = abs((z + max(stepZ, 0) - z0) * invDirZ)
+
+    val level = mc.level ?: return EtherPos.NONE
+    val mut = BlockPos.MutableBlockPos()
+
+    var lastChunkX = Int.MIN_VALUE
+    var lastChunkZ = Int.MIN_VALUE
+    var chunk: LevelChunk? = null
+
+    var lastX = x
+    var lastY = y
+    var lastZ = z
+    var lastState: BlockState? = null
+    var stepCount = 0
+
+    fun blocking(state: BlockState): Boolean = (blockFlags[Block.getId(state)] and PASSABLE) == 0
+
+    repeat(1000) {
+        val cx = x.toInt() shr 4
+        val cz = z.toInt() shr 4
+        if (cx != lastChunkX || cz != lastChunkZ) {
+            chunk = level.getChunk(cx, cz)
+            lastChunkX = cx
+            lastChunkZ = cz
+        }
+        val c = chunk ?: return EtherPos.NONE
+
+        mut.set(x, y, z)
+        val stateFeet = c.getBlockState(mut)
+        val hitFeet = blocking(stateFeet)
+
+        mut.set(x, y + 1, z)
+        val stateHead = c.getBlockState(mut)
+        val hitHead = blocking(stateHead)
+
+        if (hitFeet || hitHead) {
+            return if (stepCount == 0) EtherPos(false, BlockPos(x, y, z), if (hitFeet) stateFeet else stateHead)
+            else EtherPos(true, BlockPos(lastX, lastY, lastZ), lastState)
+        }
+
+        if (x == endX && y == endY && z == endZ) return EtherPos(true, BlockPos(x, y, z), stateFeet)
+
+        lastX = x; lastY = y; lastZ = z; lastState = stateFeet; stepCount++
+
+        when {
+            tMaxX <= tMaxY && tMaxX <= tMaxZ -> { tMaxX += tDeltaX; x += stepX }
+            tMaxY <= tMaxZ -> { tMaxY += tDeltaY; y += stepY }
+            else -> { tMaxZ += tDeltaZ; z += stepZ }
+        }
+    }
+
+    return EtherPos.NONE
+}
+
+/** Transmission landing along the given look angles (Wither Impact / AOTV). */
+fun Vec3.getTeleportPos(yaw: Float, pitch: Float, distance: Double = 10.0): EtherPos {
+    val look = getLook(wrapDegrees(yaw), wrapDegrees(pitch))
+    return predictTransmission(x, y, z, look.x, look.y, look.z, distance)
+}
+
 const val PASSABLE = 1        // ray passes through // todo move
 const val BLOCKS_FEET = 2     // cannot stand inside
 
