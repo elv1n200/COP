@@ -12,6 +12,10 @@ import cop.api.abobaui.dsl.*
 import cop.api.colour.*
 import cop.api.events.*
 import cop.api.pathfinding.impl.EtherwarpPathfinder
+import cop.api.pathfinding.teleport.PathConfig
+import cop.api.pathfinding.teleport.TeleportPathNode
+import cop.api.pathfinding.teleport.impl.TeleportEtherwarpPathfinder
+import cop.api.pathfinding.teleport.impl.TransmissionPathfinder
 import cop.api.skyblock.Island
 import cop.api.skyblock.dungeon.Dungeon.currentRoom
 import cop.api.skyblock.dungeon.Dungeon.inClear
@@ -316,13 +320,21 @@ object AutoClear : Module(
     }
 
     /**
-     * Auto-clears the current room's starred mobs with Hyperion. Scans the
-     * starred mobs (via [DungeonESP.scanStarredMobs]), groups them into the
-     * fewest wither-blade casts ([MobClusterer]), then builds a node path:
-     * etherwarp to a standing spot near each cluster, then a Hyperion cast at it.
+     * Auto-clears the current room's starred mobs with a wither blade. Faithful
+     * port of quoi's `pathToMobs` (pigeonlover1998):
      *
-     * Experimental — the inter-cluster pathing reuses the room-nav pathfinder and
-     * will want tuning from real dungeon testing.
+     *  1. Scan starred mobs ([DungeonESP.scanStarredMobs]) + group them into the
+     *     fewest Hyperion casts, greedy-ordered ([MobClusterer]).
+     *  2. For each cluster, pathfind from the current position by distance:
+     *     - `> 36` blocks → etherwarp there, then cast down at it ([toRotHype]).
+     *     - `10–36`      → AOTV transmission hops, then a hype cast.
+     *     - `<= 10`      → chain hype casts straight to it.
+     *  3. Feed the node list to the executor.
+     *
+     * The transmission physics ([predictTransmission]) used by both the pathfinder
+     * and the hype/aotv nodes keep the simulated queue exactly aligned with where
+     * the player really lands, which is what my earlier etherwarp-only adaptation
+     * couldn't do.
      */
     fun clearMobs() {
         if (!player.onGround()) return
@@ -332,80 +344,70 @@ object AutoClear : Module(
         if (mobs.isEmpty()) return modMessage("&cAuto Clear: no starred mobs found.")
 
         scope.launch {
-            val clusters = MobClusterer.getOrderedClusters(player.position(), mobs)
+            val from = player.position()
+            val clusters = MobClusterer.getOrderedClusters(from, mobs)
             if (clusters.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't cluster mobs.")
 
-            // The executor only runs a node the player is *inside* (≤0.1 away),
-            // so the queue must open with a node sitting exactly at the player's
-            // position — otherwise nothing ever matches and the path just idles.
-            // Same trick room-nav (getPath) uses: an initial "warp onto your own
-            // feet block" node from player.position().
-            var start = BlockPos(player.x, ceil(player.y - 1), player.z)
-            var dir = getEtherwarpDirection(start)
-            if (dir == null) {
-                start = start.nearbyBlocks(4f).find { it.etherwarpable && getEtherwarpDirection(it).also { d -> dir = d } != null }
-                    ?: return@launch modMessage("&cAuto Clear: no etherwarpable block to start from.")
-            }
-
+            val config = PathConfig(
+                pitchStep = pitchStep, yawStep = yawStep, hWeight = hWeight,
+                threads = threads, timeout = timeout, feedback = false,
+            )
             val new = mutableListOf<ClearNode>()
-            new.add(ClearEtherNode(player.position(), dir!!.yaw, dir.pitch))
-
-            var curStand = start
+            var currPos = from
 
             for (cluster in clusters) {
-                // A ground block near the cluster to cast from.
-                val stand = cluster.pos.nearbyBlocks(8f) { it.etherwarpable && it.state.block != Blocks.REDSTONE_BLOCK }
-                    .minByOrNull { it.vec3.distanceToSqr(curStand.vec3) } ?: continue
+                val to = cluster.pos
+                val toVec = to.vec3
+                val nWord = to.center.addVec(y = 0.5)
+                val dist = currPos.distanceTo(toVec)
 
-                // Etherwarp our way over to the casting spot (skip if already there).
-                // dropLast drops the goal node — the previous warp already lands us
-                // on `stand`, then the Hyperion node casts from there.
-                if (stand != curStand) {
-                    val seg = EtherwarpPathfinder.findPath(
-                        start = curStand, goal = stand,
-                        yawStep = yawStep, pitchStep = pitchStep, hWeight = hWeight,
-                        threads = threads, timeout = timeout, offset = true, dist = 60.0
-                    )
-                    seg?.dropLast(1)?.forEach { node ->
-                        var yaw = node.yaw
-                        var pitch = node.pitch
-                        // Short segments (<=2 nodes) come back unsmoothed with the
-                        // start node still at (0,0) — smoothPath bails on `size<=2`.
-                        // Recompute a real etherwarp direction to the cast spot so
-                        // the node doesn't fail on getEtherPos(0,0).
-                        if (yaw == 0f && pitch == 0f) {
-                            val eye = Vec3(node.pos.x + 0.5, node.pos.y + 1.05 + getEyeHeight(true), node.pos.z + 0.5)
-                            val fixed = getEtherwarpDirection(eye, stand) ?: return@forEach
-                            yaw = fixed.yaw
-                            pitch = fixed.pitch
-                        }
-                        new.add(ClearEtherNode(node.pos.center.addVec(y = 0.5), yaw, pitch))
-                    }
+                val segment = when {
+                    dist > 36.0 -> TeleportEtherwarpPathfinder.findPath(currPos, to, config, withLast = true)
+                    else -> TransmissionPathfinder.findPath(currPos, to, config, dist = if (dist > 10.0) 12.0 else 10.0)
                 }
 
-                // Cast Hyperion at the cluster from the standing spot. Wither
-                // Impact is a transmission — predict where it ACTUALLY drops us
-                // (predictTransmission), not where we aim, so the simulated queue
-                // and the real player stay in sync for the next segment. Using
-                // the aim target or an etherwarp raycast here was the desync that
-                // aborted the clear after the first cast.
-                val eye = stand.center.addVec(y = getEyeHeight(false).toDouble())
-                val target = Vec3.atCenterOf(cluster.pos).add(0.0, 1.0, 0.0)
-                val aim = getDirection(eye, target)
-                val dest = eye.getTeleportPos(aim.yaw, aim.pitch, 10.0).pos ?: cluster.pos
-                new.add(ClearHypeNode(stand.center.addVec(y = 0.5), aim.yaw, aim.pitch, dest))
+                if (segment.isNullOrEmpty()) return@launch modMessage("&cAuto Clear: pathfind failed on a cluster.")
 
-                curStand = dest
+                val last = segment.last()
+                val body = segment.dropLast(1)
+
+                when {
+                    dist > 36.0 -> {
+                        new.addAll(body.map { it.toEther() })
+                        new.add(last.toRotHype())
+                    }
+                    dist > 10.0 -> {
+                        new.addAll(body.map { it.toAotv() })
+                        if (last.vec.distanceTo(toVec) > 10.0) {
+                            new.add(last.toAotv())
+                            new.add(last.toRotHype(to, nWord.x, nWord.y, nWord.z))
+                        } else {
+                            new.add(last.toHype())
+                        }
+                    }
+                    else -> new.addAll(segment.map { it.toHype() })
+                }
+
+                currPos = nWord
             }
 
-            if (new.size <= 1) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")
+            if (new.isEmpty()) return@launch modMessage("&cAuto Clear: couldn't build a path to the mobs.")
 
             nodes = new
             position = null
             pending = null
-            modMessage("&aAuto Clear: ${clusters.size} cast(s) for ${mobs.size} mob(s).")
+            modMessage("&aAuto Clear: ${clusters.size} cluster(s), ${mobs.size} mob(s), ${new.size} nodes.")
         }
     }
+
+    // -- TeleportPathNode -> ClearNode converters (quoi) --------------------
+    private fun TeleportPathNode.toEther() = ClearEtherNode(vec, yaw, pitch)
+    private fun TeleportPathNode.toAotv() = ClearAotvNode(vec, yaw, pitch)
+    private fun TeleportPathNode.toHype() = ClearHypeNode(vec, yaw, pitch)
+    /** A hype cast looking straight down (0, 90) — used to AOE the cluster once
+     *  you've teleported onto/next to it. Position can be overridden. */
+    private fun TeleportPathNode.toRotHype(pos: BlockPos = this.pos, x: Double = this.x, y: Double = this.y, z: Double = this.z) =
+        TeleportPathNode(x, y, z, pos, g, h, parent, 0f, 90f).toHype()
 
     private fun map() = aboba("cop clear map") {
 //        val iconCfg = MapRenderer.IconConfig(
@@ -438,17 +440,21 @@ object AutoClear : Module(
     private data class Stupid(var x: Double, var y: Double, var z: Double)
 
     /**
-     * One teleport in a clear path. Was an etherwarp-only data class; now a tiny
-     * hierarchy so the executor can mix AOTV etherwarps ([ClearEtherNode]) with
-     * Hyperion/wither-blade casts ([ClearHypeNode]) for auto-mob-clearing.
+     * One teleport in a clear path. Three primitives, matching quoi:
+     *  - [ClearEtherNode]  — AOTV etherwarp (sneak, ~60 blocks, lands on a block).
+     *  - [ClearAotvNode]   — AOTV instant transmission (no sneak, ~12-block air hop).
+     *  - [ClearHypeNode]   — wither-blade Wither Impact (no sneak, ~10-block transmit + AOE).
+     *
+     * Each provides the [items] it teleports with, whether it's [sneak]ed, the
+     * standing [yOff]set after landing, and its [raycast] physics (etherwarp voxel
+     * traversal vs transmission prediction) — all driven by the same [EtherPos]
+     * result so the executor stays generic.
      */
     private abstract class ClearNode(val pos: Vec3, val yaw: Float, val pitch: Float) {
-        /** Skyblock ids this node can teleport with — first held one is used. */
         abstract val items: Array<String>
-        /** Whether the teleport is held while sneaking (etherwarp yes, Wither-Impact no). */
         abstract val sneak: Boolean
-        /** Where the teleport lands, or null if it can't resolve (aborts the path). */
-        abstract fun landing(from: Vec3): BlockPos?
+        abstract val yOff: Double
+        abstract fun raycast(from: Vec3): EtherPos
 
         fun inside(stupid: Stupid): Boolean {
             val dx = pos.x - stupid.x
@@ -461,9 +467,9 @@ object AutoClear : Module(
             if (player.lastSentInput.shift != sneak) return false
 
             val from = Vec3(stupid.x, stupid.y + getEyeHeight(sneak), stupid.z)
-            val land = landing(from)
+            val res = raycast(from)
 
-            if (land == null) {
+            if (!res.succeeded || res.pos == null) {
                 nodes = null
                 position = null
                 postDelay = 2
@@ -472,35 +478,37 @@ object AutoClear : Module(
             }
 
             pending = Direction(yaw, pitch)
-
-            stupid.x = land.x + 0.5
-            stupid.y = land.y + 1.05
-            stupid.z = land.z + 0.5
+            stupid.x = res.pos.x + 0.5
+            stupid.y = res.pos.y + yOff
+            stupid.z = res.pos.z + 0.5
             return true
         }
     }
 
-    /** AOTV etherwarp — sneak + right-click onto a solid block along the aim. */
+    /** AOTV etherwarp — sneak, lands on a solid block up to ~60 blocks along the aim. */
     private class ClearEtherNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
         override val items = arrayOf("ASPECT_OF_THE_VOID")
         override val sneak = true
-        override fun landing(from: Vec3): BlockPos? =
-            from.getEtherPos(yaw, pitch).takeIf { it.succeeded }?.pos
+        override val yOff = 1.05
+        override fun raycast(from: Vec3): EtherPos = from.getEtherPos(yaw, pitch)
     }
 
-    /** Wither-blade (Hyperion / Astraea / Scylla / Valkyrie) — right-click casts
-     *  Wither Impact: a ≤10-block transmit toward the aim plus an AOE that kills
-     *  the mobs clustered there.
-     *
-     *  Unlike etherwarp, Wither Impact is a transmission — it drops you where you
-     *  aim (in air), it does NOT need a solid block to warp onto. So the landing
-     *  is the cluster spot passed in at build time ([dest]); resolving it with an
-     *  etherwarp raycast is wrong and used to abort the path right after the first
-     *  cast ("failed from …"). Returning [dest] always keeps the simulated queue
-     *  in sync with the next segment, which is pathfound from that same spot. */
-    private class ClearHypeNode(pos: Vec3, yaw: Float, pitch: Float, private val dest: BlockPos) : ClearNode(pos, yaw, pitch) {
+    /** AOTV instant transmission — no sneak, ~12-block air hop. */
+    private class ClearAotvNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
+        override val items = arrayOf("ASPECT_OF_THE_VOID")
+        override val sneak = false
+        override val yOff = 1.0
+        override fun raycast(from: Vec3): EtherPos = from.getTeleportPos(yaw, pitch, 12.0)
+    }
+
+    /** Wither-blade (Hyperion / Astraea / Scylla / Valkyrie) — no sneak, ~10-block
+     *  Wither Impact transmit plus an AOE that kills the mobs at the landing.
+     *  Lands via [predictTransmission] (getTeleportPos) — the real Wither Impact
+     *  physics — so the simulated queue matches where the player really ends up. */
+    private class ClearHypeNode(pos: Vec3, yaw: Float, pitch: Float) : ClearNode(pos, yaw, pitch) {
         override val items = arrayOf("HYPERION", "ASTRAEA", "SCYLLA", "VALKYRIE")
         override val sneak = false
-        override fun landing(from: Vec3): BlockPos = dest
+        override val yOff = 1.0
+        override fun raycast(from: Vec3): EtherPos = from.getTeleportPos(yaw, pitch, 10.0)
     }
 }

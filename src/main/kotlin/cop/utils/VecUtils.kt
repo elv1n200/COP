@@ -385,7 +385,7 @@ fun isPathClear(from: Vec3, target: Vec3): Boolean {
     return result.type == HitResult.Type.MISS
 }
 
-fun getVisiblePoint(from: Vec3, to: BlockPos): Vec3? {
+fun getVisiblePoint(from: Vec3, to: BlockPos, block: (Vec3) -> BlockPos? = { rayCast(from, it) }): Vec3? {
     val t = to.vec3
     val targets = listOf(
         // centre
@@ -428,7 +428,7 @@ fun getVisiblePoint(from: Vec3, to: BlockPos): Vec3? {
     )
 
     for (targetVec in targets) {
-        val hitPos = rayCast(from, targetVec.subtract(from))
+        val hitPos = block(targetVec.subtract(from))
         if (hitPos == to) {
             return targetVec
         }
@@ -798,6 +798,28 @@ fun Vec3.getTeleportPos(yaw: Float, pitch: Float, distance: Double = 10.0): Ethe
     val look = getLook(wrapDegrees(yaw), wrapDegrees(pitch))
     return predictTransmission(x, y, z, look.x, look.y, look.z, distance)
 }
+
+/**
+ * Exact yaw/pitch to land a transmission (AOTV / Wither Impact) *on* [to], or
+ * null if no visible point of the block is reachable within [dist]. The
+ * transmission analogue of [getEtherwarpDirection] — probes the block's faces
+ * with [predictTransmission] instead of an etherwarp raycast.
+ *
+ * Ported from quoi (`TeleportUtils.getTransmissionDirection`, pigeonlover1998).
+ */
+fun getTransmissionDirection(from: Vec3, to: BlockPos, dist: Double = 12.0): Direction? {
+    if (from.distanceToSqr(to.vec3) > (dist + 2) * (dist + 2)) return null
+
+    val visibleVec = getVisiblePoint(from, to) { vec ->
+        val n = vec.normalize()
+        predictTransmission(from.x, from.y, from.z, n.x, n.y, n.z, dist).pos
+    } ?: return null
+
+    return getDirection(from, visibleVec)
+}
+
+fun getTransmissionDirection(to: BlockPos, dist: Double = 12.0) =
+    getTransmissionDirection(mc.player!!.eyePosition(), to, dist)
 
 const val PASSABLE = 1        // ray passes through // todo move
 const val BLOCKS_FEET = 2     // cannot stand inside
