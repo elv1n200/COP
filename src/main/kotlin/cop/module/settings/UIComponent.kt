@@ -11,6 +11,7 @@ import cop.api.abobaui.events.AbobaEvent
 import cop.api.abobaui.transforms.impl.Alpha
 import cop.api.animations.Animation
 import cop.api.input.CursorShape
+import cop.config.Config
 import cop.module.impl.render.ClickGui.description
 import cop.utils.ThemeManager.theme
 import cop.utils.ui.cursor
@@ -50,6 +51,13 @@ abstract class UIComponent<T>( // todo cleanup
     val valueUpdated = ValueUpdated()
 
     private var onValueChanged: (old: T, new: T) -> Unit = { _, _ -> }
+
+    /**
+     * Snapshot used to detect user-visible setting changes while rendered.
+     * Components with a derived/animated value can override this with their
+     * stable persisted state.
+     */
+    protected open fun changeFingerprint(): Int = value.hashCode()
 
     open fun hide(): UIComponent<T> {
         hidden = true
@@ -170,7 +178,7 @@ abstract class UIComponent<T>( // todo cleanup
 
 
         val element = rendering.element
-        var hashCode = value.hashCode()
+        var hashCode = changeFingerprint()
         var oldValue = value
 
         val alphaAnimation = Alpha.Animated(to = 0f, from = 1f)
@@ -216,10 +224,15 @@ abstract class UIComponent<T>( // todo cleanup
                 }
             }
 
-            if (hashCode != value.hashCode()) {
-                hashCode = value.hashCode()
+            val currentFingerprint = changeFingerprint()
+            if (hashCode != currentFingerprint) {
+                hashCode = currentFingerprint
                 onValueChanged.invoke(oldValue, value)
                 oldValue = value
+                // The baseline is captured when this component is rendered,
+                // after Config.load(), so loading/reading settings does not
+                // produce writes. Only a subsequent value change reaches here.
+                Config.requestSave()
                 rendering.ui.eventManager.postToAll(valueUpdated, element)
             }
             false

@@ -64,6 +64,10 @@ class SelectorComponent<T>(
         }
     }
 
+    override fun reset() {
+        index = optionIndex(defaultSelected)
+    }
+
     override fun hashCode(): Int = index
 
     override fun equals(other: Any?): Boolean {

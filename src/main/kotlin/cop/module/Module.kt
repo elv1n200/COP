@@ -11,6 +11,7 @@ import cop.api.input.CatKeys
 import cop.api.skyblock.Island
 import cop.api.skyblock.IslandArea
 import cop.api.skyblock.Location
+import cop.config.Config
 import cop.module.settings.Setting
 import cop.module.settings.impl.Keybinding
 import cop.utils.ChatUtils.modMessage
@@ -104,9 +105,19 @@ abstract class Module(
     }
 
     fun toggle() {
-        enabled = !enabled
-        if (enabled) onEnable()
-        else onDisable()
+        val previous = enabled
+        enabled = !previous
+        try {
+            if (enabled) onEnable()
+            else onDisable()
+        } catch (error: Throwable) {
+            // Never persist a state whose lifecycle callback failed. Restoring
+            // the flag also prevents a broken onEnable from becoming a startup
+            // failure loop on the next config load.
+            enabled = previous
+            throw error
+        }
+        Config.requestSave()
     }
 
     fun addSettings(vararg setArray: Setting<*>) {

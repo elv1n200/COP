@@ -18,7 +18,9 @@ import cop.utils.ui.rendering.NVGRenderer.minecraftFont
 import kotlin.reflect.KProperty0
 import kotlin.reflect.jvm.isAccessible
 
-inline val inHudEditor get() = mc.screen?.title?.string == "Quoi! hud editor"
+const val HUD_EDITOR_TITLE = "COP · HUD Studio"
+
+inline val inHudEditor get() = mc.screen?.title?.string == HUD_EDITOR_TITLE
 
 inline fun ElementScope<*>.onHover(duration: Float, crossinline block: () -> Unit) {
     onMouseEnter {

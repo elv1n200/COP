@@ -273,7 +273,7 @@ object CopCommand {
                 } ?: modMessage("Unknown module name: ${moduleName.string}")
             }.suggests { ModuleManager.modules.map { it.name } }.description("Toggles specified module.")
 
-            "hud" { open(HudManager.editor()) }.description("Opens Hud editor.")
+            "hud" { HudManager.openEditor() }.description("Opens Hud editor.")
 
             // Phase 5: Auto Croesus loot summary. Reads the JSONL log written
             // by the buy driver and prints aggregates per tier + top items.

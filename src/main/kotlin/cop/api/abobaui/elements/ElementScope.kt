@@ -166,7 +166,16 @@ open class ElementScope<E : Element>(val element: E) {
         element.init()
     }
 
-    fun operation(operation: Operation) = element.ui.addOperation(operation)
+    fun operation(operation: Operation) = element.ui.addOperation {
+        // Dynamic views (for example the Control Center's settings pane) can
+        // detach complete element subtrees and build replacements. Operations
+        // used to stay in AbobaUI's global list forever and kept polling those
+        // dead controls. Drop an operation as soon as its element is no longer
+        // connected to this UI's root.
+        var root: Element = element
+        while (root.parent != null) root = root.parent!!
+        if (root !== element.ui.main) true else operation.run()
+    }
 
     fun transform(transform: Transform) = element.addTransform(transform)
 }

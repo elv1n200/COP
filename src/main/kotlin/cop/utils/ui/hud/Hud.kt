@@ -128,6 +128,10 @@ open class Hud(
             scaleTransformation = this@Hud.scale.value
             redraw = true
         }
+
+        fun savePosition(screenWidth: Float, screenHeight: Float) {
+            this@Hud.savePosition(this, screenWidth, screenHeight)
+        }
     }
 
     open class Scope(element: Element, val preview: Boolean) : ElementScope<Element>(element) {

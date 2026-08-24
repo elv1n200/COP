@@ -13,6 +13,9 @@ import cop.api.abobaui.elements.impl.Popup
 import cop.api.animations.Animation
 import cop.api.colour.Colour
 import cop.api.input.CursorShape
+import cop.CopMod.logger
+import cop.config.Config
+import cop.module.impl.render.ClickGui.openHudStudio
 import cop.module.settings.Saving
 import cop.module.settings.UIComponent
 import cop.utils.ChatUtils.modMessage
@@ -24,7 +27,6 @@ import cop.utils.ui.hud.HudManager
 import cop.utils.ui.hud.HudManager.settings
 import cop.utils.ui.popupX
 import cop.utils.ui.popupY
-import cop.utils.ui.screens.UIScreen.Companion.open
 
 class HudComponent<T : Hud>(
     name: String,
@@ -39,18 +41,32 @@ class HudComponent<T : Hud>(
         if (value.toggleable) addProperty("enabled", value.enabled)
         value.settings.forEach {
             if (it !is Saving) return@forEach
-            add(it.name, it.write())
+            add(it.jsonName, it.write())
         }
     }
 
     override fun read(element: JsonElement) {
         if (element !is JsonObject) return
-        if (value.toggleable) value.enabled = element.get("enabled")?.asBoolean ?: value.enabled
-        element.apply {
-            entrySet().forEach {
-                val setting = value.getSettingByName(it.key) as? Saving ?: return@forEach
-                setting.read(it.value)
+        if (value.toggleable) {
+            element.get("enabled")?.let { enabledValue ->
+                runCatching { value.enabled = enabledValue.asBoolean }
+                    .onFailure { error ->
+                        logger.warn("Ignoring invalid HUD enabled state for '${value.name}'", error)
+                    }
             }
+        }
+
+        val persistedSettings = value.settings.filter { it is Saving }
+        val keys = persistedSettings.map { HudSettingKey(it.name, it.jsonName) }
+        val legacy = usesLegacyHudSettingKeys(element.keySet(), keys)
+
+        element.entrySet().forEach { (savedKey, savedValue) ->
+            val index = resolveHudSettingIndex(savedKey, keys, legacy) ?: return@forEach
+            val setting = persistedSettings[index] as Saving
+            runCatching { setting.read(savedValue) }
+                .onFailure { error ->
+                    logger.warn("Ignoring invalid HUD setting '$savedKey' for '${value.name}'", error)
+                }
         }
     }
 
@@ -87,7 +103,7 @@ class HudComponent<T : Hud>(
                     ) {
                         cursor(CursorShape.HAND)
                         onClick(nonSpecific = true) {
-                            open(HudManager.editor())
+                            openHudStudio()
                             true
                         }
                     }
@@ -123,6 +139,7 @@ class HudComponent<T : Hud>(
                 col.animate(0.25.seconds, Animation.Style.EaseInOutQuint)
                 outlineCol.animate(0.25.seconds, Animation.Style.EaseInOutQuint)
                 value.enabled = !value.enabled
+                Config.requestSave()
             }
         }
 
@@ -146,7 +163,7 @@ class HudComponent<T : Hud>(
             ) {
                 cursor(CursorShape.HAND)
                 onClick(nonSpecific = true) {
-                    open(HudManager.editor())
+                    openHudStudio()
                     true
                 }
             }
@@ -163,7 +180,12 @@ class HudComponent<T : Hud>(
                 }
             }
 
-            if (!asSub) switch(value::enabled, size = 20.px, pos = at(y = Centre))
+            if (!asSub) switch(
+                value::enabled,
+                size = 20.px,
+                pos = at(y = Centre),
+                onToggle = Config::requestSave,
+            )
         }
 
         onClick {

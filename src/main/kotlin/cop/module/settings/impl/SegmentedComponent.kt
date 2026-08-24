@@ -61,6 +61,10 @@ class SegmentedComponent<T>(
         }
     }
 
+    override fun reset() {
+        index = options.indexOf(defaultSelected).coerceAtLeast(0)
+    }
+
     override fun hashCode(): Int = index
 
     override fun equals(other: Any?): Boolean {

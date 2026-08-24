@@ -10,26 +10,30 @@ import cop.api.ServerInfo.currentPing
 import cop.api.ServerInfo.currentTps
 import cop.api.ServerInfo.medianPing
 import cop.api.abobaui.AbobaUI
-import cop.api.abobaui.constraints.impl.measurements.Animatable
+import cop.api.abobaui.constraints.Constraint
 import cop.api.abobaui.constraints.impl.positions.Centre
 import cop.api.abobaui.constraints.impl.size.Bounding
 import cop.api.abobaui.constraints.impl.size.Copying
 import cop.api.abobaui.constraints.impl.size.Fill
 import cop.api.abobaui.dsl.*
+import cop.api.abobaui.elements.Element
 import cop.api.abobaui.elements.ElementScope
 import cop.api.abobaui.elements.Layout.Companion.divider
 import cop.api.abobaui.elements.impl.Block.Companion.outline
 import cop.api.abobaui.elements.impl.Popup
+import cop.api.abobaui.elements.impl.Scrollable
 import cop.api.abobaui.elements.impl.Scrollable.Companion.scroll
+import cop.api.abobaui.elements.impl.Scrollable.Companion.scrollToTop
+import cop.api.abobaui.elements.impl.Text.Companion.textSupplied
 import cop.api.abobaui.elements.impl.TextInput.Companion.maxWidth
 import cop.api.abobaui.elements.impl.TextInput.Companion.onTextChanged
 import cop.api.abobaui.elements.impl.layout.Column
 import cop.api.abobaui.elements.impl.popup
-import cop.api.animations.Animation
 import cop.api.colour.Colour
 import cop.api.colour.colour
 import cop.api.colour.withAlpha
 import cop.api.input.CatKeys
+import cop.api.input.CursorShape
 import cop.api.skyblock.dungeon.Dungeon
 import cop.api.skyblock.dungeon.Floor
 import cop.config.Config
@@ -40,15 +44,14 @@ import cop.module.impl.misc.Test
 import cop.module.settings.Setting.Companion.json
 import cop.module.settings.UIComponent
 import cop.module.settings.UIComponent.Companion.childOf
-import cop.module.settings.impl.MapSetting
 import cop.module.settings.impl.SelectorComponent
 import cop.utils.ChatUtils.modMessage
 import cop.utils.StringUtils.capitaliseFirst
 import cop.utils.StringUtils.percentColour
 import cop.utils.StringUtils.toFixed
-import cop.utils.StringUtils.width
 import cop.utils.ThemeManager.theme
 import cop.utils.WorldUtils.day
+import cop.utils.ui.cursor
 import cop.utils.ui.elements.themedInput
 import cop.utils.ui.hud.HudManager
 import cop.utils.ui.onHover
@@ -127,15 +130,6 @@ object ClickGui : Module(
         )
     }.setting()
 
-    private val categoryData by MapSetting(
-        "category data",
-        mutableMapOf<Category, CategoryData>().apply {
-            Category.entries.forEach {
-                this[it] = CategoryData(x = 10f + 265f * it.ordinal, y = 10f, extended = true)
-            }
-        }
-    )
-    
     private var currentPet by textInput("Current pet", "").hide() // just for cfg
 
     override fun onKeybind() {
@@ -152,275 +146,558 @@ object ClickGui : Module(
         }.description("Shows ping.")
     }
 
-    private const val MODULE_SIZE = 30.0f
+    private const val MODULE_ROW_HEIGHT = 66.0f
+    private var selectedCategory = Category.DUNGEON
+    private var openingHudStudio = false
 
     var clickGui: AbobaUI.Instance = clickGui()
         private set
 
-    private fun clickGui() = aboba("COP · Module & HUD Configuration") {
+    private fun clickGui() = aboba("COP · Control Center") {
         val moduleScopes = arrayListOf<Pair<Module, ElementScope<*>>>()
+        var searchQuery = ""
+        var selectedModule = modulesFor(selectedCategory).firstOrNull() ?: modules.firstOrNull()
+        lateinit var detailColumn: ElementScope<Column>
+        lateinit var searchInput: ElementScope<cop.api.abobaui.elements.impl.TextInput>
+        var moduleListScroll: ElementScope<Scrollable>? = null
+        var detailScroll: ElementScope<Scrollable>? = null
+
         ui.debug = Test.uiDebug
         onRemove {
             Config.save()
-            HudManager.reinit(immediately = false)
+            if (!openingHudStudio) HudManager.reinit(immediately = false)
+            openingHudStudio = false
         }
 
-        for (category in Category.entries) {
-            // Lazily seed a default position if this category isn't in the
-            // persisted map yet. Happens for any category added after a user's
-            // config was written (e.g. ADDON) — MapSetting.read() clear()s the
-            // map before putAll()ing the saved entries, dropping the construct-
-            // time defaults. Throwing here used to hard-crash the ClickGUI in
-            // that case.
-            val data = categoryData[category] ?: CategoryData(
-                x = 10f + 265f * category.ordinal, y = 10f, extended = true
-            ).also { categoryData[category] = it }
+        fun matches(module: Module): Boolean {
+            val query = searchQuery.trim()
+            return query.isEmpty() ||
+                module.name.contains(query, true) ||
+                module.desc.contains(query, true) ||
+                module.category.displayName.contains(query, true) ||
+                module.subCategory?.contains(query, true) == true ||
+                module.settings.any { it.name.contains(query, true) || it.description.contains(query, true) }
+        }
 
-            column(at(x = data.x.px, y = data.y.px)) panel@ {
-                dropShadow(
-                    colour = Colour.BLACK.withAlpha(0.25f),
-                    blur = 10f,
-                    spread = 5f,
-                    radius = 6.radius()
-                )
-                onRemove {
-                    data.x = element.x
-                    data.y = element.y
-                }
-                val height = Animatable(from = Bounding, to = 0.px, swapIf = !data.extended)
-                block(
-                    size(260.px, (MODULE_SIZE + 5).px),
-                    colour = theme.surface,
-                    radius(tl = 6, tr = 6)
-                ) {
-                    text(
-                        string = category.displayName,
-                        size = 70.percent,
-                        colour = theme.onSurface
-                    )
+        fun visibleModules(): List<Module> = modules.filter {
+            matches(it) && (searchQuery.isNotBlank() || it.category == selectedCategory)
+        }
 
-                    onClick(button = 1) {
-                        height.animate(0.25.seconds, style = Animation.Style.EaseInOutQuint)
-                        redraw()
-                        data.extended = !data.extended
-                        println(moduleScopes)
-                        true
-                    }
+        fun select(module: Module?) {
+            selectedModule = module
+            detailColumn.renderModuleDetails(module)
+            detailScroll?.scrollToTop()
+            moduleScopes.forEach { it.second.redraw() }
+        }
 
-                    draggable(moves = this@panel.element)
-                }
-
-                val scrollable = scrollable(size(Copying, Bounding)) {
-                    column(size(Copying, height)) {
-                        block(
-                            copies(),
-                            colour = colour { theme.surface.withAlpha(0.7f).rgb }
-                        )
-                        // Group modules by sub-category. The flat group (subCategory == null)
-                        // renders directly. Other groups get a collapsible sub-header.
-                        val grouped = modulesFor(category).groupBy { it.subCategory }
-                        // Render flat (un-grouped) modules first if any exist.
-                        grouped[null]?.forEach { module ->
-                            moduleScopes.add(module to module(module))
-                        }
-                        // Then each sub-group with its header.
-                        grouped.entries
-                            .filter { it.key != null }
-                            .sortedWith(
-                                compareBy<Map.Entry<String?, List<Module>>> {
-                                    subCategoryOrder(category, it.key.orEmpty())
-                                }.thenBy {
-                                    it.value.firstOrNull()?.let { module -> modulesFor(category).indexOf(module) } ?: 0
-                                }
-                            )
-                            .forEach { (sub, mods) ->
-                                subCategorySection(category, sub!!, mods, moduleScopes, data)
-                            }
-                    }
-                }
-
-                block(
-                    size(260.px, 10.px),
-                    colour = theme.surface,
-                    radius(bl = 6, br = 6)
-                )
-
-                onScroll { (amount) ->
-                    scrollable.scroll(amount * -(MODULE_SIZE * 2f))
-                }
+        fun refreshList() {
+            val visible = visibleModules()
+            moduleScopes.forEach { (module, scope) ->
+                scope.enabled = module in visible
             }
+            moduleListScroll?.scrollToTop()
+            if (selectedModule !in visible) select(visible.firstOrNull())
+            moduleScopes.firstOrNull { it.second.enabled }?.second?.element?.parent?.redraw()
         }
 
-        column(
+        block(copies(), theme.background.withAlpha(0.82f))
+
+        block(
             constrain(
-                x = Centre, y = 90.percent,
-                w = 375.px, h = Bounding
+                x = Centre,
+                y = Centre,
+                w = 94.percent.coerceAtMost(1180.px),
+                h = 90.percent.coerceAtMost(760.px)
             ),
-            gap = 10.px
+            colour = theme.surfaceContainerLow,
+            radius = 14.radius()
         ) {
-            draggable(button = 1)
+            dropShadow(
+                colour = Colour.BLACK.withAlpha(0.42f),
+                blur = 18f,
+                spread = 7f,
+                radius = 14.radius()
+            )
+            outline(theme.outlineVariant, thickness = 1.px)
 
-            row(at(x = Centre), gap = 10.px) {
-
-                mapOf(
-                    "Hud editor" to { open(HudManager.editor(fromMain = true)) },
-                    "Discord" to { Util.getPlatform().openUri(URI("https://discord.gg/Uc9gVncs6P")) }
-                ).forEach { (text, block) ->
+            column(copies()) {
+                block(
+                    size(Copying, 72.px),
+                    colour = theme.surfaceContainer,
+                    radius(tl = 14, tr = 14)
+                ) {
                     block(
-                        size(w = 135.px, h = 40.px),
-                        colour = theme.surface,
+                        constrain(x = 20.px, y = 18.px, w = 36.px, h = 36.px),
+                        colour = theme.primary,
                         radius = 10.radius()
                     ) {
-                        outline(theme.primary, thickness = 2.px)
-                        tonalHover()
+                        text("C", colour = theme.onPrimary, size = 20.px)
+                    }
+                    text(
+                        string = "COP",
+                        pos = at(x = 68.px, y = 17.px),
+                        size = 20.px,
+                        colour = theme.onSurface
+                    )
+                    text(
+                        string = "CONTROL CENTER",
+                        pos = at(x = 68.px, y = 42.px),
+                        size = 10.px,
+                        colour = theme.primary
+                    )
+
+                    searchInput = themedInput(
+                        pos = at(x = Centre, y = 18.px),
+                        size = size(38.percent, 36.px),
+                        colour = theme.surfaceContainerHighest,
+                        radius = 9.radius()
+                    ) {
+                        textInput(
+                            placeholder = "Search modules and settings...",
+                            colour = theme.onSurface,
+                            placeHolderColour = theme.onSurfaceVariant,
+                            caretColour = theme.primary,
+                            pos = at(x = 12.px),
+                            size = 14.px
+                        ) {
+                            maxWidth(Fill - 24.px)
+                            onTextChanged { (value) ->
+                                searchQuery = value
+                                refreshList()
+                            }
+                        }
+                    }
+
+                    block(
+                        constrain(x = 18.px.alignOpposite, y = 18.px, w = 148.px, h = 36.px),
+                        colour = theme.primaryContainer,
+                        radius = 9.radius()
+                    ) {
+                        tonalHover(theme.onPrimaryContainer)
+                        cursor(CursorShape.HAND)
+                        image(
+                            image = theme.moveImage,
+                            constraints = constrain(x = 12.px, w = 16.px, h = 16.px),
+                            colour = theme.onPrimaryContainer
+                        )
                         text(
-                            string = text,
-                            size = theme.textSize,
-                            colour = theme.onSurface
+                            string = "HUD Studio",
+                            pos = at(x = 38.px),
+                            size = 14.px,
+                            colour = theme.onPrimaryContainer
                         )
                         onClick {
-                            block()
+                            openHudStudio()
+                            true
                         }
                     }
                 }
-            }
 
-            themedInput(
-                size = size(Copying, 40.px),
-                colour = theme.surface,
-                radius = 10.radius()
-            ) {
-                textInput(
-                    placeholder = "Search...",
-                    colour = theme.onSurface,
-                    placeHolderColour = theme.onSurfaceVariant,
-                    caretColour = theme.primary,
-                ) {
-                    maxWidth(Fill - 3.percent)
-                    onTextChanged { (string) ->
-                        moduleScopes.forEach { (m, element) ->
-                            element.enabled =
-                                m.name.contains(string, true) ||
-                                        m.desc.contains(string, true) ||
-                                        m.settings.any { it.name.contains(string, true) }
+                row(size(Copying, Fill)) {
+                    column(size(20.percent, Copying)) {
+                        block(size(Copying, 58.px), theme.surfaceContainerLow) {
+                            text(
+                                string = "WORKSPACES",
+                                pos = at(x = 18.px),
+                                size = 11.px,
+                                colour = theme.onSurfaceVariant
+                            )
+                        }
+                        scrollable(size(Copying, Fill - 54.px)) {
+                            column(size(Copying, Bounding), gap = 6.px) {
+                                divider(6.px)
+                                Category.entries.forEach { category ->
+                                    categoryNavigation(category) {
+                                        selectedCategory = category
+                                        searchQuery = ""
+                                        searchInput.element.text = ""
+                                        refreshList()
+                                    }
+                                }
+                                divider(6.px)
+                            }
+                            onScroll { (amount) -> scroll(amount * -46f) }
+                        }
+                        block(size(Copying, 54.px), theme.surfaceContainerLow) {
+                            tonalHover()
+                            cursor(CursorShape.HAND)
+                            textSupplied(
+                                supplier = {
+                                    val active = modules.count { it.enabled || it.alwaysActive }
+                                    "$active active modules"
+                                },
+                                pos = at(x = 18.px),
+                                size = 12.px,
+                                colour = theme.onSurfaceVariant
+                            )
+                            text(
+                                string = "Discord ↗",
+                                pos = at(x = 14.px.alignOpposite),
+                                size = 11.px,
+                                colour = theme.primary,
+                            )
+                            onClick {
+                                Util.getPlatform().openUri(URI("https://discord.gg/Uc9gVncs6P"))
+                                true
+                            }
+                        }
+                    }
+
+                    block(size(1.px, Copying), theme.outlineVariant)
+
+                    column(size(36.percent, Copying)) {
+                        block(size(Copying, 58.px), theme.surfaceContainerLow) {
+                            textSupplied(
+                                supplier = { if (searchQuery.isBlank()) selectedCategory.displayName else "Search results" },
+                                pos = at(x = 18.px, y = 12.px),
+                                size = 18.px,
+                                colour = theme.onSurface
+                            )
+                            textSupplied(
+                                supplier = {
+                                    val count = modules.count { matches(it) && (searchQuery.isNotBlank() || it.category == selectedCategory) }
+                                    "$count ${if (count == 1) "module" else "modules"}"
+                                },
+                                pos = at(x = 18.px, y = 37.px),
+                                size = 11.px,
+                                colour = theme.onSurfaceVariant
+                            )
+                        }
+                        moduleListScroll = scrollable(size(Copying, Fill)) {
+                            column(
+                                constrain(x = 12.px, w = Copying - 24.px, h = Bounding),
+                                gap = 8.px
+                            ) {
+                                divider(4.px)
+                                Category.entries.forEach { category ->
+                                    modulesFor(category).forEach { module ->
+                                        val scope = moduleRow(module, { selectedModule == module }) { select(it) }
+                                        moduleScopes += module to scope
+                                    }
+                                }
+                                val emptyState = block(
+                                    size(Copying, 86.px),
+                                    theme.surfaceContainer,
+                                    10.radius()
+                                ) {
+                                    text(
+                                        string = "No modules found",
+                                        pos = at(y = 25.px),
+                                        size = 15.px,
+                                        colour = theme.onSurface
+                                    )
+                                    text(
+                                        string = "Try a shorter or different search.",
+                                        pos = at(y = 51.px),
+                                        size = 10.px,
+                                        colour = theme.onSurfaceVariant
+                                    )
+                                }
+                                emptyState.enabled = false
+                                emptyState.operation {
+                                    emptyState.enabled = modules.none {
+                                        matches(it) && (searchQuery.isNotBlank() || it.category == selectedCategory)
+                                    }
+                                    false
+                                }
+                                divider(10.px)
+                            }
+                            onScroll { (amount) ->
+                                scroll(amount * -(MODULE_ROW_HEIGHT + 14f))
+                            }
+                        }
+                    }
+
+                    block(size(1.px, Copying), theme.outlineVariant)
+
+                    column(size(Fill, Copying)) {
+                        block(size(Copying, 58.px), theme.surfaceContainerLow) {
+                            text(
+                                string = "DETAILS & SETTINGS",
+                                pos = at(x = 18.px),
+                                size = 11.px,
+                                colour = theme.onSurfaceVariant
+                            )
+                        }
+                        detailScroll = scrollable(size(Copying, Fill)) {
+                            detailColumn = column(
+                                constrain(x = 18.px, w = Copying - 36.px, h = Bounding),
+                                gap = 12.px
+                            ) {
+                                renderModuleDetails(selectedModule)
+                            }
+                            onScroll { (amount) -> scroll(amount * -56f) }
                         }
                     }
                 }
             }
-        }.element.moveToBottom()
+        }
+
+        refreshList()
     }
 
-    /** Render a collapsible sub-section inside a category column. Mirrors the
-     *  main category header pattern (Animatable height + click to toggle) but
-     *  smaller and a touch more muted. Per-sub-category collapse state is
-     *  persisted in [CategoryData.subExtended]. */
-    private fun ElementScope<*>.subCategorySection(
-        category: Category,
-        sub: String,
-        mods: List<Module>,
-        moduleScopes: MutableList<Pair<Module, ElementScope<*>>>,
-        data: CategoryData,
-    ) {
-        val expanded = data.isSubExpanded(sub)
-        val height = Animatable(from = Bounding, to = 0.px, swapIf = !expanded)
+    /** Open the HUD editor as a child of the Control Center. */
+    fun openHudStudio() {
+        openingHudStudio = true
+        HudManager.openEditor(fromMain = true)
+    }
 
+    private fun ElementScope<Column>.categoryNavigation(category: Category, onSelect: () -> Unit) {
         block(
-            size(Copying, 22.px),
-            // More opaque so the header is clearly visible against the
-            // scrollable background (which itself is theme.surface @ 0.7).
-            colour = colour { theme.surfaceVariant.rgb },
+            constrain(x = 10.px, w = Copying - 20.px, h = 46.px),
+            colour = colour {
+                if (selectedCategory == category) theme.primaryContainer.rgb
+                else theme.surfaceContainerLow.rgb
+            },
+            radius = 9.radius()
         ) {
             tonalHover()
-            text(
-                string = subCategoryLabel(sub),
-                size = 13.px,
-                colour = theme.onSurface,
+            cursor(CursorShape.HAND)
+
+            block(
+                constrain(x = 0.px, y = 8.px, w = 3.px, h = 30.px),
+                colour = colour {
+                    if (selectedCategory == category) theme.primary.rgb
+                    else theme.primary.withAlpha(0f).rgb
+                },
+                radius = 2.radius()
             )
-            // Left-click to toggle. Right-click on the parent column is
-            // reserved for category drag + collapse. We mirror the main
-            // category header's pattern exactly so we don't hit a different
-            // code path on the AbobaUI side: element.redraw() + Animatable
-            // height.animate() + persist on `data`.
-            onClick(button = 0) {
-                height.animate(0.2.seconds, style = Animation.Style.EaseInOutQuint)
-                element.redraw()
-                data.toggleSubExpanded(sub)
+            text(
+                string = category.displayName,
+                pos = at(x = 14.px),
+                size = 14.px,
+                colour = colour {
+                    if (selectedCategory == category) theme.onPrimaryContainer.rgb
+                    else theme.onSurface.rgb
+                }
+            )
+            block(
+                constrain(x = 10.px.alignOpposite, w = 30.px, h = 22.px),
+                colour = colour {
+                    if (selectedCategory == category) theme.primary.withAlpha(0.18f).rgb
+                    else theme.surfaceContainerHighest.rgb
+                },
+                radius = 11.radius()
+            ) {
+                text(
+                    string = modules.count { it.category == category }.toString(),
+                    size = 11.px,
+                    colour = theme.onSurfaceVariant
+                )
+            }
+            onClick {
+                onSelect()
+                redraw()
                 true
             }
         }
-
-        column(size(Copying, height)) {
-            for (module in mods) {
-                moduleScopes.add(module to module(module))
-            }
-        }
     }
 
-    private fun ElementScope<*>.module(module: Module) = column(size(Copying)) {
-        var loaded = false
-        lateinit var settings: ElementScope<Column>
-
-        val col = Colour.Animated(
-            from = theme.surface,
-            to = theme.primaryContainer,
-            swapIf = module.enabled
-        )
-        val height = Animatable(from = 0.px, to = Bounding)
+    private fun ElementScope<Column>.moduleRow(
+        module: Module,
+        isSelected: () -> Boolean,
+        onSelect: (Module) -> Unit
+    ): ElementScope<*> = block(
+        size(Copying, MODULE_ROW_HEIGHT.px),
+        colour = colour {
+            if (isSelected()) theme.surfaceContainerHighest.rgb
+            else theme.surfaceContainer.rgb
+        },
+        radius = 10.radius()
+    ) {
+        tonalHover()
+        cursor(CursorShape.HAND)
+        description(module.desc)
 
         block(
-            size(Copying, MODULE_SIZE.px),
-            colour = col,
-        ) {
-//            hoverEffect(factor = 1.15f)
-            tonalHover()
-            description(module.desc)
-            text(
-                string = module.name,
-                size = 18.px,
-                colour = theme.onSurface
-            )
+            constrain(x = 0.px, y = 10.px, w = 3.px, h = 46.px),
+            colour = colour {
+                if (isSelected()) theme.primary.rgb else theme.primary.withAlpha(0f).rgb
+            },
+            radius = 2.radius()
+        )
+        text(
+            string = module.name,
+            pos = at(x = 14.px, y = 11.px),
+            size = 16.px,
+            colour = theme.onSurface
+        )
 
-            if (module.tag == Tag.LEGACY) image(
+        val settingsCount = module.settings.count { it is UIComponent<*> && it.parent == null }
+        val group = module.subCategory?.let(::subCategoryLabel) ?: module.category.displayName
+        text(
+            string = "$group  ·  $settingsCount ${if (settingsCount == 1) "setting" else "settings"}",
+            pos = at(x = 14.px, y = 38.px),
+            size = 10.px,
+            colour = theme.onSurfaceVariant
+        )
+
+        if (module.tag == Tag.LEGACY) {
+            image(
                 image = theme.refreshImage,
-                constraints = constrain(3.percent.alignOpposite, w = 20.px, h = 20.px),
+                constraints = constrain(x = 60.px.alignOpposite, y = 13.px, w = 15.px, h = 15.px),
                 colour = theme.onSurfaceVariant
             ).description(module.tag.desc)
+        }
 
+        if (module.alwaysActive) {
+            block(
+                constrain(x = 12.px.alignOpposite, y = 22.px, w = 42.px, h = 22.px),
+                colour = theme.primary.withAlpha(0.14f),
+                radius = 11.radius()
+            ) {
+                text("CORE", size = 9.px, colour = theme.primary)
+            }
+        } else {
+            moduleSwitch(module, at(x = 12.px.alignOpposite, y = 23.px)) {
+                redraw()
+            }
+        }
+
+        onClick {
+            onSelect(module)
+            true
+        }
+    }
+
+    private fun ElementScope<*>.moduleSwitch(
+        module: Module,
+        pos: cop.api.abobaui.constraints.Positions,
+        onChanged: () -> Unit = {}
+    ) {
+        block(
+            constrain(x = pos.x, y = pos.y, w = 38.px, h = 20.px),
+            colour = colour {
+                if (module.enabled) theme.primary.rgb else theme.surfaceVariant.rgb
+            },
+            radius = 10.radius()
+        ) {
             var lastEnabled = module.enabled
-            onAdd {
+            cursor(CursorShape.HAND)
+            block(
+                constrain(
+                    x = object : Constraint.Position {
+                        override fun calculatePos(element: Element, horizontal: Boolean): Float =
+                            if (module.enabled) 20f else 3f
+                    },
+                    y = 3.px,
+                    w = 14.px,
+                    h = 14.px
+                ),
+                colour = colour {
+                    if (module.enabled) theme.onPrimary.rgb else theme.onSurfaceVariant.rgb
+                },
+                radius = 7.radius()
+            )
+            operation {
                 if (lastEnabled != module.enabled) {
                     lastEnabled = module.enabled
-                    col.swap()
                     redraw()
                 }
+                false
             }
-
-            onClick(button = 0) {
-                col.animate(0.15.seconds, Animation.Style.Linear)
+            onClick {
                 module.toggle()
-                lastEnabled = module.enabled
+                redraw()
+                onChanged()
                 true
+            }
+        }
+    }
+
+    private fun ElementScope<Column>.renderModuleDetails(module: Module?) {
+        element.removeAll()
+        divider(4.px)
+
+        if (module == null) {
+            block(size(Copying, 100.px), theme.surfaceContainer, 10.radius()) {
+                text("Select a module to view its settings", size = 14.px, colour = theme.onSurfaceVariant)
+            }
+            element.redraw()
+            return
+        }
+
+        val descriptionLines = if (module.desc.isBlank()) {
+            listOf("No description available.")
+        } else {
+            NVGRenderer.wrapText(module.desc, 330f, 12f, defaultFont).take(3)
+        }
+        val headerHeight = 96f + (descriptionLines.size - 1).coerceAtLeast(0) * 15f
+
+        block(size(Copying, headerHeight.px), theme.surfaceContainer, 11.radius()) {
+            outline(theme.outlineVariant, thickness = 1.px)
+            text(
+                string = buildString {
+                    append(module.category.displayName.uppercase())
+                    module.subCategory?.let { append("  /  ${subCategoryLabel(it).uppercase()}") }
+                },
+                pos = at(x = 16.px, y = 13.px),
+                size = 9.px,
+                colour = theme.primary
+            )
+            text(
+                string = module.name,
+                pos = at(x = 16.px, y = 34.px),
+                size = 19.px,
+                colour = theme.onSurface
+            )
+            descriptionLines.forEachIndexed { index, line ->
+                text(
+                    string = line,
+                    pos = at(x = 16.px, y = (66 + index * 15).px),
+                    size = 11.px,
+                    colour = theme.onSurfaceVariant
+                )
             }
 
-            onClick(button = 1) {
-                if (!loaded) {
-                    settings.apply {
-                        module.settings.forEach { setting ->
-                            if (setting !is UIComponent || setting.parent != null) return@forEach
-                            setting.render(this)
-                        }
-                        divider(0.px)
-                    }
-                    loaded = true
+            if (module.alwaysActive) {
+                block(
+                    constrain(x = 14.px.alignOpposite, y = 30.px, w = 58.px, h = 26.px),
+                    theme.primary.withAlpha(0.14f),
+                    13.radius()
+                ) {
+                    text("ALWAYS ON", size = 8.px, colour = theme.primary)
                 }
-                height.animate(0.25.seconds, style = Animation.Style.EaseInOutQuint)
-                element.redraw()
-                true
+            } else {
+                moduleSwitch(module, at(x = 16.px.alignOpposite, y = 33.px)) {
+                    element.redraw()
+                }
             }
         }
-        settings = column(constrain(x = 7.px, w = Copying - 14.px, h = height), gap = 9.px) {
-            divider(9.px)
+
+        row(size(Copying, 24.px)) {
+            text("SETTINGS", size = 11.px, colour = theme.onSurfaceVariant)
+            block(size(Fill, 1.px), theme.outlineVariant)
         }
+
+        val settings = module.settings.filterIsInstance<UIComponent<*>>().filter { it.parent == null }
+        if (settings.isEmpty()) {
+            block(size(Copying, 76.px), theme.surfaceContainer, 10.radius()) {
+                text(
+                    string = "No configurable settings",
+                    pos = at(y = 22.px),
+                    size = 14.px,
+                    colour = theme.onSurface
+                )
+                text(
+                    string = "This module only needs its on/off switch.",
+                    pos = at(y = 46.px),
+                    size = 10.px,
+                    colour = theme.onSurfaceVariant
+                )
+            }
+        } else {
+            block(size(Copying, Bounding + 28.px), theme.surfaceContainer, 10.radius()) {
+                column(
+                    constrain(x = 14.px, y = 14.px, w = Copying - 28.px, h = Bounding),
+                    gap = 10.px
+                ) {
+                    settings.forEach { setting -> setting.render(this) }
+                }
+            }
+        }
+        divider(12.px)
+        element.redraw()
     }
 
     fun ElementScope<*>.description(desc: String) {
@@ -493,33 +770,6 @@ object ClickGui : Module(
         open(clickGui)
     }
 
-    data class CategoryData(
-        var x: Float,
-        var y: Float,
-        var extended: Boolean,
-        /** Per-sub-category collapse state. Key is the lowercased package
-         *  segment used as the sub-category id (e.g. "cheats", "huds"); value
-         *  is true when the sub-section is expanded. Missing key OR null map
-         *  defaults to expanded.
-         *
-         *  Stored as nullable because Gson ignores Kotlin's default-value when
-         *  the field is missing from old JSON, leaving it null on first load
-         *  after this code shipped. [isSubExpanded] / [toggleSubExpanded] lazy-
-         *  init the map on first write so the rest of the GUI never has to
-         *  null-check it. */
-        var subExtended: MutableMap<String, Boolean>? = null,
-    ) {
-        val defaultX = x
-        val defaultY = y
-
-        fun isSubExpanded(sub: String): Boolean = subExtended?.get(sub) ?: true
-
-        fun toggleSubExpanded(sub: String) {
-            val map = subExtended ?: mutableMapOf<String, Boolean>().also { subExtended = it }
-            map[sub] = !(map[sub] ?: true)
-        }
-    }
-
     private enum class PingType(val value: () -> Double) {
         Average({ averagePing }),
         Current({ currentPing }),
@@ -575,15 +825,4 @@ object ClickGui : Module(
             .replaceFirstChar { it.uppercase() }
     }
 
-    private fun subCategoryOrder(category: Category, sub: String): Int {
-        val order = when (category) {
-            Category.DUNGEON -> listOf("worldrender", "huds", "solvers", "qol", "cheats")
-            Category.RENDER -> listOf("world", "hud", "effects")
-            Category.PLAYER -> listOf("movement", "combat", "cheats", "automation")
-            Category.MISC -> listOf("automation", "economy", "slayer", "dojo", "events", "riftsolvers")
-            Category.MINING -> listOf("navigation", "qol", "cheats", "automation")
-            Category.ADDON -> emptyList()
-        }
-        return order.indexOf(sub.lowercase()).takeIf { it >= 0 } ?: Int.MAX_VALUE
-    }
 }

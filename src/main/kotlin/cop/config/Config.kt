@@ -4,6 +4,7 @@ import cop.CopMod.logger
 import cop.CopMod.mc
 import cop.api.events.core.EventBus
 import cop.api.events.GameEvent
+import cop.api.events.TickEvent
 import cop.module.ModuleManager
 import cop.module.settings.Saving
 import com.google.gson.*
@@ -79,6 +80,8 @@ object Config {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
     private val saveScheduled = AtomicBoolean(false)
+    private val saveGate = DebouncedSaveGate(SAVE_DEBOUNCE_MILLIS)
+    @Volatile private var applyingLoadedConfig = false
 
     private val configFile = File(mc.gameDirectory, "config/cop/cop-config.json").apply {
         try {
@@ -92,6 +95,21 @@ object Config {
 
     init {
         EventBus.on<GameEvent.Unload> { save() }
+        EventBus.on<TickEvent.End> {
+            if (saveGate.takeIfDue(monotonicMillis())) save()
+        }
+    }
+
+    /**
+     * Persist a UI edit shortly after input settles. This closes the old gap
+     * where setting changes lived only in memory until the ClickGUI closed or
+     * Minecraft stopped; a quick restart/forced launcher stop could therefore
+     * restore the previous values. Repeated slider updates collapse into one
+     * atomic write.
+     */
+    fun requestSave() {
+        if (applyingLoadedConfig) return
+        saveGate.request(monotonicMillis())
     }
 
     fun load() {
@@ -119,13 +137,18 @@ object Config {
             return
         }
 
-        applyModuleConfigEntries(
-            modules = modules,
-            applyModule = ::loadModule,
-            onFailure = { index, error ->
-                logger.warn("Skipping invalid COP config module entry at index $index", error)
-            },
-        )
+        applyingLoadedConfig = true
+        try {
+            applyModuleConfigEntries(
+                modules = modules,
+                applyModule = ::loadModule,
+                onFailure = { index, error ->
+                    logger.warn("Skipping invalid COP config module entry at index $index", error)
+                },
+            )
+        } finally {
+            applyingLoadedConfig = false
+        }
     }
 
     /** Load settings before enabling the module so onEnable observes restored values. */
@@ -169,6 +192,9 @@ object Config {
             return
         }
 
+        // This snapshot also satisfies any delayed UI-save request.
+        saveGate.clear()
+
         try {
             // reason doing this is better is that
             // using like a custom serializer leaves 'null' in settings that don't save
@@ -209,4 +235,8 @@ object Config {
             Files.deleteIfExists(temp)
         }
     }
+
+    private fun monotonicMillis(): Long = System.nanoTime() / 1_000_000L
+
+    private const val SAVE_DEBOUNCE_MILLIS = 350L
 }

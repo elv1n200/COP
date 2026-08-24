@@ -140,4 +140,15 @@ class ColourPickerComponent(
             box()
         }
     }
+
+    /** Rainbow hue is animated every frame but is not persisted. */
+    override fun changeFingerprint(): Int {
+        val persisted = if (rainbow) storedValue else value
+        var result = rainbow.hashCode()
+        result = 31 * result + persisted.hue.hashCode()
+        result = 31 * result + persisted.saturation.hashCode()
+        result = 31 * result + persisted.brightness.hashCode()
+        result = 31 * result + persisted.alpha.hashCode()
+        return result
+    }
 }

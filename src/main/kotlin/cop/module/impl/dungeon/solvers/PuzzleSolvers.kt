@@ -70,7 +70,8 @@ object PuzzleSolvers : Module(
     private val beamsTracer by switch("Tracer").json("Beams tracer").childOf(::beamsSolver)
     private val beamsStyle by selector("Style", "Box", arrayListOf("Box", "Filled box"), desc = "Render style to be used.").json("Beams style").childOf(::beamsSolver)
     private val beamsAlpha by slider("Colour alpha", 0.7f, 0f, 1f, 0.05f).json("Beams colour alpha").childOf(::beamsSolver)
-    private val beamsAnnounce by switch("Announce completion", desc = "Sends complete message.").childOf(::beamsDropdown).asParent()
+    private val beamsAnnounce by switch("Announce completion", desc = "Sends complete message.")
+        .json("Beams announce completion").childOf(::beamsDropdown).asParent()
     private val beamsAuto by switch("Auto").json("Auto beams").childOf(::beamsDropdown).asParent()
 
     private val blazeDropdown by text("Blaze")

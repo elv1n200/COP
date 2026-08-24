@@ -14,7 +14,13 @@ import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 
-class UIScreen(val instance: AbobaUI.Instance, val background: Boolean = true ) : Screen(Component.literal(instance.title)) {
+class UIScreen(
+    val instance: AbobaUI.Instance,
+    val background: Boolean = true,
+    private val onUserClose: (() -> Unit)? = null,
+) : Screen(Component.literal(instance.title)) {
+
+    private var instanceClosed = false
 
     override fun init() {
         instance.init(width * sf, height * sf)
@@ -78,8 +84,25 @@ class UIScreen(val instance: AbobaUI.Instance, val background: Boolean = true ) 
         instance.eventManager.onMouseScroll(verticalAmount.toFloat())
 
     override fun onClose() {
-        instance.close()
+        onUserClose?.invoke()
+        closeInstance()
         super.onClose()
+    }
+
+    /**
+     * Minecraft calls [removed] when one screen is replaced directly by
+     * another, without necessarily going through [onClose]. AbobaUI's remove
+     * callbacks persist the ClickGUI/HUD state, so they must run on both paths.
+     */
+    override fun removed() {
+        closeInstance()
+        super.removed()
+    }
+
+    private fun closeInstance() {
+        if (instanceClosed) return
+        instanceClosed = true
+        instance.close()
     }
 
     override fun isPauseScreen() = false
@@ -95,6 +118,10 @@ class UIScreen(val instance: AbobaUI.Instance, val background: Boolean = true ) 
     //? }
 
     companion object {
-        fun open(ui: AbobaUI.Instance, background: Boolean = true) = scheduleTask { mc.setScreen(UIScreen(ui, background)) }
+        fun open(
+            ui: AbobaUI.Instance,
+            background: Boolean = true,
+            onUserClose: (() -> Unit)? = null,
+        ) = scheduleTask { mc.setScreen(UIScreen(ui, background, onUserClose)) }
     }
 }

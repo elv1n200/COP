@@ -27,6 +27,11 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- ClickGUI vollständig als zentriertes **COP Control Center** mit globaler
+  Suche, Kategorie-Navigation, sichtbaren Modulschaltern und eigenem
+  Detail-/Settings-Bereich neu gestaltet.
+- HUD-Editor als **COP HUD Studio** mit fester Toolbar, thematischen
+  Auswahl-/Snap-Linien und verständlicheren Leerzuständen überarbeitet.
 - Fairy-/Weaver-Ausblendung entfernt keine Entities mehr aus der Client-Welt, sondern unterdrückt nur deren Rendering.
 - Compact-Chat-Zustand ist begrenzt und wird bei Weltwechsel zurückgesetzt.
 - Projektseite, Credits und Third-Party-Hinweise wurden für den aktuellen mc26-Stand überarbeitet.
@@ -40,6 +45,15 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Einstellungs-, Modul- und HUD-Änderungen werden entprellt und atomar
+  gespeichert; Auto Leap/Fast Leap sowie Hotkey-, Befehls- und HUD-Editor-
+  Änderungen überstehen damit auch schnelle Neustarts zuverlässig.
+- Alte HUD-Konfigurationen mit kollidierenden Anzeigenamen werden auf stabile
+  JSON-Schlüssel migriert; weitere Kollisionen in Puzzle Solvers und Dojo
+  Automation wurden getrennt.
+- Selector-/Segmented-Reset, dynamische Settings-Operationen, Such-/Scroll-
+  Zustände und direkte Screen-Wechsel zwischen Control Center und HUD Studio
+  wurden korrigiert.
 - Startabsturz auf Minecraft 26.1.2 behoben: Auto Terms wertet intrinsische
   Item-Glints erst nach dem Registry-Bootstrap aus (`Components not bound yet`).
 

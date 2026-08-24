@@ -8,6 +8,7 @@ import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
 import cop.api.skyblock.Island
 import cop.module.Module
+import cop.module.settings.Setting.Companion.json
 import cop.module.settings.UIComponent.Companion.childOf
 import cop.utils.EntityUtils.getEntities
 import cop.utils.Scheduler
@@ -69,7 +70,8 @@ object DojoAutomation : Module(
         unit = "ms",
         desc = "Releases shortly before the wool target expires.",
     ).childOf(::masteryHeader)
-    private val masteryRotation by slider("Aim duration", 125, 0, 350, 25, unit = "ms").childOf(::masteryHeader)
+    private val masteryRotation by slider("Aim duration", 125, 0, 350, 25, unit = "ms")
+        .json("Mastery aim duration").childOf(::masteryHeader)
 
     private val movementHeader by text("Movement tests")
     private val autoStamina by switch("Auto jump in Stamina", true).childOf(::movementHeader)

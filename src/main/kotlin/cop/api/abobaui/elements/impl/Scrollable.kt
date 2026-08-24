@@ -85,6 +85,21 @@ class Scrollable(
         animationY = Animation(duration, style)
     }
 
+    /**
+     * Immediately returns this viewport to its first row.
+     *
+     * Dynamic screens replace or filter their children in-place. Keeping the
+     * previous offset in that situation can leave shorter content completely
+     * outside the viewport, so those screens need a non-animated reset.
+     */
+    fun scrollToTop() {
+        offsetY = 0f
+        fromY = 0f
+        toY = 0f
+        animationY = null
+        redraw()
+    }
+
     companion object {
         /**
          * Invokes [Scrollable.scroll] and redraws the element.
@@ -100,5 +115,9 @@ class Scrollable(
             element.scroll(amount, duration, style)
             element.redraw()
         }
+
+        /** Reset a dynamically changed scroll view without an animation. */
+        @AbobaDSL
+        fun ElementScope<Scrollable>.scrollToTop() = element.scrollToTop()
     }
 }

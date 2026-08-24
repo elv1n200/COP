@@ -5,6 +5,7 @@ import cop.api.abobaui.constraints.Constraint
 import cop.api.abobaui.constraints.Positions
 import cop.api.abobaui.constraints.impl.measurements.Animatable
 import cop.api.abobaui.constraints.impl.measurements.Pixel
+import cop.api.abobaui.constraints.impl.positions.Centre
 import cop.api.abobaui.constraints.impl.size.Bounding
 import cop.api.abobaui.constraints.impl.size.Copying
 import cop.api.abobaui.dsl.*
@@ -24,12 +25,15 @@ import cop.api.events.GuiEvent
 import cop.api.events.WorldEvent
 import cop.api.events.core.EventBus
 import cop.api.input.CatKeys
+import cop.api.input.CursorShape
 import cop.config.Config
 import cop.module.settings.UIComponent
 import cop.module.settings.impl.ColourPickerComponent
 import cop.utils.Scheduler.scheduleTask
 import cop.utils.StringUtils.toFixed
 import cop.utils.ThemeManager.theme
+import cop.utils.ui.HUD_EDITOR_TITLE
+import cop.utils.ui.cursor
 import cop.utils.ui.popupX
 import cop.utils.ui.popupY
 import cop.utils.ui.rendering.NVGRenderer
@@ -51,6 +55,7 @@ object HudManager { // todo add hud grouping
     private var selected: Popup? = null
     private var lineX: Float = -1f
     private var lineY: Float = -1f
+    private var returnToControlCenter = false
     private const val SNAP_THRESHOLD = 5f
 
     init {
@@ -97,15 +102,25 @@ object HudManager { // todo add hud grouping
 
     var hudSettings: Popup? = null
 
-    fun editor(fromMain: Boolean = false) = aboba("Quoi! hud editor") {
+    fun openEditor(fromMain: Boolean = false) {
+        returnToControlCenter = false
+        open(
+            editor(fromMain),
+            onUserClose = {
+                if (fromMain) returnToControlCenter = true
+            },
+        )
+    }
+
+    fun editor(fromMain: Boolean = false) = aboba(HUD_EDITOR_TITLE) {
 
         ui.debug = Test.uiDebug
         var hoverInfo: Popup? = null
 
         object : Element(copies()) {
             override fun drawNvg() {
-                NVGRenderer.line(lineX, 0f, lineX, ui.main.height, 1f, Colour.YELLOW.rgb)
-                NVGRenderer.line(0f, lineY, ui.main.width, lineY, 1f, Colour.YELLOW.rgb)
+                if (lineX >= 0f) NVGRenderer.line(lineX, 0f, lineX, ui.main.height, 1.5f, theme.primary.withAlpha(0.85f).rgb)
+                if (lineY >= 0f) NVGRenderer.line(0f, lineY, ui.main.width, lineY, 1.5f, theme.primary.withAlpha(0.85f).rgb)
             }
         }.add()
 
@@ -114,9 +129,17 @@ object HudManager { // todo add hud grouping
         }
 
         onRemove {
+            val shouldReturnToControlCenter = fromMain && returnToControlCenter
+            returnToControlCenter = false
+            selected?.closePopup()
+            selected = null
+            hudSettings?.closePopup()
+            hudSettings = null
+            lineX = -1f
+            lineY = -1f
             scheduleTask { Config.save() }
             reinit(immediately = false)
-            if (fromMain) open(clickGui)
+            if (shouldReturnToControlCenter) open(clickGui)
         }
 
         onClick {
@@ -125,11 +148,79 @@ object HudManager { // todo add hud grouping
             ui.unfocus()
         }
 
-        dragSelection()
+        // Keep movable previews in their own z-layer. They can reorder inside
+        // this group without ever covering the editor toolbar below.
+        val hudLayer = group(copies()) {
+            dragSelection()
+        }
+
+        val toolbar = block(
+            constrain(
+                x = Centre,
+                y = 14.px,
+                w = 88.percent.coerceAtMost(780.px),
+                h = 54.px
+            ),
+            colour = theme.surfaceContainerHigh.withAlpha(0.96f),
+            radius = 12.radius()
+        ) {
+            dropShadow(
+                colour = Colour.BLACK.withAlpha(0.32f),
+                blur = 12f,
+                spread = 4f,
+                radius = 12.radius()
+            )
+            outline(theme.outlineVariant, thickness = 1.px)
+            onClick { true }
+
+            block(
+                constrain(x = 12.px, w = 30.px, h = 30.px),
+                colour = theme.primary,
+                radius = 9.radius()
+            ) {
+                text("C", size = 16.px, colour = theme.onPrimary)
+            }
+            text(
+                string = "HUD STUDIO",
+                pos = at(x = 52.px, y = 10.px),
+                size = 15.px,
+                colour = theme.onSurface
+            )
+            text(
+                string = "Drag to move  ·  Right-click settings  ·  Wheel scales  ·  Arrows nudge",
+                pos = at(x = 52.px, y = 32.px),
+                size = 9.px,
+                colour = theme.onSurfaceVariant
+            )
+            block(
+                constrain(x = 12.px.alignOpposite, w = 66.px, h = 30.px),
+                colour = theme.primaryContainer,
+                radius = 9.radius()
+            ) {
+                tonalHover(theme.onPrimaryContainer)
+                cursor(CursorShape.HAND)
+                text("Done", size = 12.px, colour = theme.onPrimaryContainer)
+                onClick {
+                    if (fromMain) returnToControlCenter = true
+                    mc.setScreen(null)
+                    true
+                }
+            }
+        }
+
+        toolbar.operation {
+            // Settings/selection popups are attached to the UI root. Keep the
+            // fixed toolbar above those dynamic elements as well as previews.
+            if (ui.main.children?.lastOrNull() !== toolbar.element) {
+                toolbar.element.moveToTop()
+            }
+            false
+        }
 
         huds.forEach { hud ->
             val element = hud.Element()
-            element.add()
+            hudLayer.element.addElement(element)
+            element.init()
 
             Hud.Scope(element, preview = true).apply {
                 hud.builder(this)
@@ -156,6 +247,14 @@ object HudManager { // todo add hud grouping
                 }
 
                 onRelease {
+                    if (dragging) {
+                        // Constraints are updated during mouse movement; apply
+                        // them before converting the rendered position back to
+                        // the persisted percentage/anchor representation.
+                        ui.main.positionChildren()
+                        element.savePosition(ui.main.width, ui.main.height)
+                        Config.requestSave()
+                    }
                     dragging = false
                 }
 
@@ -222,11 +321,14 @@ object HudManager { // todo add hud grouping
                         element.constraints.y = element.y.px
                     }
 
-                    val newX = (element.constraints.x.pixels + x).coerceIn(0f, ui.main.width - element.width)
-                    val newY = (element.constraints.y.pixels + y).coerceIn(0f, ui.main.height - element.height)
+                    val newX = (element.constraints.x.pixels + x).coerceIn(0f, ui.main.width - element.screenWidth())
+                    val newY = (element.constraints.y.pixels + y).coerceIn(0f, ui.main.height - element.screenHeight())
 
                     element.constraints.x.pixels = newX
                     element.constraints.y.pixels = newY
+                    ui.main.positionChildren()
+                    element.savePosition(ui.main.width, ui.main.height)
+                    Config.requestSave()
                     element.redraw()
                     true
                 }
@@ -247,6 +349,7 @@ object HudManager { // todo add hud grouping
                     val newValue = hud.scale.value + (hud.scale.incrementD * amount)
                     hud.scale.set(newValue)
                     element.scaleTransformation = hud.scale.value
+                    Config.requestSave()
                 }
             }
         }
@@ -282,8 +385,8 @@ object HudManager { // todo add hud grouping
         return popup(constraints = constrain(px, py, width, height), smooth = true) {
             outlineBlock(
                 constraints = copies(),
-                colour = Colour.WHITE,
-                thickness = 1.px,
+                colour = theme.primary,
+                thickness = 1.5.px,
                 4.radius()
             )
 
@@ -299,6 +402,13 @@ object HudManager { // todo add hud grouping
             }
 
             onRelease {
+                if (mouseDown) {
+                    ui.main.positionChildren()
+                    selectedHuds.forEach { hud ->
+                        hud.savePosition(ui.main.width, ui.main.height)
+                    }
+                    Config.requestSave()
+                }
                 mouseDown = false
                 lineX = -1f
                 lineY = -1f
@@ -415,9 +525,9 @@ object HudManager { // todo add hud grouping
     private fun ElementScope<*>.dragSelection() {
         val selection = block(
             constraints = constrain(0.px, 0.px, 0.px, 0.px),
-            colour = Colour.RGB(61, 174, 233, 0.25f),
+            colour = theme.primary.withAlpha(0.18f),
             4.radius()
-        ).outline(Colour.RGB(61, 174, 233), thickness = 1.px).toggle()
+        ).outline(theme.primary, thickness = 1.px).toggle()
 
         var clickedX = 0f
         var clickedY = 0f
@@ -447,7 +557,7 @@ object HudManager { // todo add hud grouping
                     .orEmpty()
 
                 selected?.closePopup()
-                selected = selectHuds(selectedHuds)
+                selected = if (selectedHuds.isEmpty()) null else selectHuds(selectedHuds)
 
                 selection.toggle()
                 selection.redraw()
@@ -472,9 +582,6 @@ object HudManager { // todo add hud grouping
     }
 
     fun ElementScope<*>.settings(pos: Positions, hud: Hud, onClose: () -> Unit, hudElement: Element? = null, onValue: () -> Unit = {}) = popup(copies(), smooth = false) {
-        if (hud.settings.size == 4) return@popup
-
-
         onClick {
             closePopup()
             onClose()
@@ -518,6 +625,26 @@ object HudManager { // todo add hud grouping
                     )
                     column(constrain(x = 5.px, w = Copying - 10.px, h = ColumnHeight), gap = 5.px) { // fixme
                         divider(5.px)
+                        if (hud.settings.size == 4) {
+                            block(
+                                size(Copying, 62.px),
+                                colour = theme.surfaceContainer,
+                                radius = 6.radius()
+                            ) {
+                                text(
+                                    string = "No extra settings",
+                                    pos = at(y = 16.px),
+                                    size = 14.px,
+                                    colour = theme.onSurface
+                                )
+                                text(
+                                    string = "Use the mouse wheel over this HUD to change its scale.",
+                                    pos = at(y = 39.px),
+                                    size = 9.px,
+                                    colour = theme.onSurfaceVariant
+                                )
+                            }
+                        }
                         hud.settings.forEach { setting ->
                             if (setting !is UIComponent) return@forEach
                             if (setting.parent != null && setting.parent as UIComponent in hud.settings) return@forEach
