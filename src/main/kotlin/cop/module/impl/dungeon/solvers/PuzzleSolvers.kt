@@ -159,7 +159,7 @@ object PuzzleSolvers : Module(
             if (wbSolver || wbAuto) WaterSolver.onServerTick()
         }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             val msg = message.noControlCodes
             if (quizSolver || quizAuto) QuizSolver.onMessage(msg)
             if (weirdosSolver || weirdosAuto) weirdosRegex.find(msg)?.destructured?.let { (npc, message) -> WeirdosSolver.onMessage(npc, message) }
@@ -170,7 +170,7 @@ object PuzzleSolvers : Module(
             if (beamsSolver || beamsAuto) BeamsSolver.onBlockChange(this@on, beamsAnnounce, beamsAuto)
         }
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             if (!inPuzzle) return@on
             when (packet) {
                 is ClientboundSoundPacket          -> if (beamsSolver || beamsAuto) BeamsSolver.onSound(packet)

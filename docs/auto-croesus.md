@@ -1,178 +1,183 @@
 # Auto Croesus
 
-Auto-claim driver für den Croesus-NPC im Dungeon Hub. Highlightet
-unclaimed Runs, zeigt pro Chest Cost/Value/Profit, und kann auf Tastendruck
-komplette Multi-Run-Zyklen abklicken — inklusive NPC-Re-Interact, Kismet
-Rerolls und Loot-Log.
+[← Dokumentationsübersicht](README.md)
 
-## Quickstart
+Auto Croesus unterstützt das Croesus-Menü im Dungeon Hub. Das Modul markiert noch nicht abgeholte Durchläufe, berechnet Kosten, Wert und Gewinn der verfügbaren Truhen und kann auf Tastendruck eine einzelne Truhe, mehrere Truhen eines Durchlaufs oder mehrere Durchläufe nacheinander bearbeiten.
 
-1. Stell dich neben den Croesus-NPC im Dungeon Hub.
-2. Module aktivieren: `/cop` → **Dungeons** → **Auto Croesus**.
-3. **Auto claim (master)** anschalten — das ist der Killswitch, ohne ihn
-   ist die Claim-Taste inert.
-4. Tastenbelegung setzen: **Claim best chest** auf z.B. `R`.
-5. **Multi-run claim** anschalten.
-6. Croesus öffnen → Claim-Taste drücken → zurücklehnen.
+> [!CAUTION]
+> Die automatische Bedienung ist standardmäßig deaktiviert. Prüfe vor der Nutzung die Regeln des Servers und beobachte einen neuen Ablauf zunächst vollständig. Preisangaben externer Dienste können fehlen oder veraltet sein.
 
-## Settings — was macht was
+## Schnellstart
 
-### Visuals (jederzeit aus/an, beeinflussen das Auto-Claim nicht)
+1. Stelle dich im Dungeon Hub in die Nähe von Croesus.
+2. Öffne `/cop` und aktiviere unter **Dungeons → Qol → Auto Croesus** das Modul.
+3. Aktiviere **Auto claim (master)**. Ohne diesen Hauptschalter löst die Claim-Taste keine Aktion aus.
+4. Weise **Claim best chest** eine Taste zu.
+5. Öffne zunächst einen einzelnen Durchlauf, prüfe das Gewinn-Overlay und teste eine einzelne Truhe.
+6. Aktiviere **Multi-run claim** oder **Chain claim (this run)** erst, nachdem der Einzelablauf korrekt funktioniert.
 
-| Setting | Standard | Effekt |
-|---|---|---|
-| **Unclaimed highlight** | grün | Farbe um Runs mit noch nicht geclaimten Chests im Croesus-Menü. |
-| **Border width** | 2 px | Dicke der Highlight-Border. |
-| **Show profit overlay** | an | Per-Chest Overlay (Cost / Value / Profit) in der Run-Sub-Screen. |
-| **Highlight best chest** | an | Goldene Border + ★ vor dem profitabelsten Chest. |
-| **Best-chest highlight** | gold | Farbe der Best-Chest-Border. |
-| **Refresh rate** | 5 t | Wie oft (in Ticks) das Run-GUI re-parsed wird. |
-| **Debug dump key** | none | In jedem Chest-GUI: dumpt Titel + alle Slots + Inventory in `latest.log`. Diagnose-Tool. |
+## Einstellungen
 
-### Auto-Claim Core
+### Anzeige
 
-| Setting | Standard | Effekt |
-|---|---|---|
-| **Auto claim (master)** | **aus** | Killswitch. Ohne den ist die Claim-Taste inert. |
-| **Claim best chest** | none | Hauptkeybind. In Run-Sub-Screen → 1-Chest-Claim. In Croesus-Liste (+ Multi-Run on) → Full-Cycle. |
-| **Min profit** | 50.000 | Coins. Chests unter dem Wert werden ohne Kismet skipped. |
-| **Claim timeout** | 60 t | Abort, wenn Buy-Confirm-GUI nicht in N Ticks aufgeht. |
+Diese Optionen ändern nur die Darstellung.
 
-### Chain (mehrere Chests pro Run)
+| Einstellung | Standard | Wirkung |
+|---|---:|---|
+| **Unclaimed highlight** | Grün | Rahmen um Durchläufe mit noch nicht abgeholten Truhen |
+| **Border width** | 2 px | Breite des Rahmens |
+| **Show profit overlay** | An | Zeigt Kosten, Gesamtwert und Gewinn pro Truhe |
+| **Highlight best chest** | An | Markiert die Truhe mit dem höchsten berechneten Gewinn |
+| **Best-chest highlight** | Gold | Farbe der Markierung für die beste Truhe |
+| **Refresh rate** | 5 t | Intervall, in dem ein geöffnetes Truhenmenü neu ausgewertet wird |
+| **Debug dump key** | Nicht belegt | Schreibt Titel, Slots und Lore des Menüs sowie IDs aus dem Hauptinventar in `latest.log` |
 
-| Setting | Standard | Effekt |
-|---|---|---|
-| **Chain claim (this run)** | aus | Nach jedem Buy automatisch zurück zur Run-Sub-Screen, nächsten besten Chest claimen, weiter — **braucht Dungeon Chest Keys** in der Inv. |
+### Automatisches Abholen
 
-### Multi-Run (alle Runs auf einer Croesus-Seite)
+| Einstellung | Standard | Wirkung |
+|---|---:|---|
+| **Auto claim (master)** | **Aus** | Hauptschalter für alle automatischen Claim-Aktionen |
+| **Claim best chest** | Nicht belegt | Startet je nach geöffnetem Menü einen Einzel- oder Multi-Run-Ablauf |
+| **Min profit** | **100.000 Coins** | Eine reguläre Truhe wird nur bei einem Gewinn von **mindestens** diesem Wert gekauft (`Gewinn >= Min profit`) |
+| **Claim timeout** | 60 t | Bricht einen festhängenden Ablauf ab; 20 Ticks entsprechen ungefähr einer Sekunde |
 
-| Setting | Standard | Effekt |
-|---|---|---|
-| **Multi-run claim** | aus | Vom Croesus-Listing aus: Run öffnen → besten Chest claimen → zurück zur Liste → nächster Run → wiederholen. Nutzt **NPC-Re-Interact** nach jedem Buy (Menü schließt sich Server-seitig komplett). |
-| **Multi-run pacing** | 6 t | Padding zwischen Server-Aktionen: post-Buy → NPC-Reopen, und Menü-Open → Klick. Runter (3-4) auf schneller Connection, hoch (10-15) wenn `expected run sub-screen, got Croesus` Fehler auftauchen. |
+`Min profit = 0` entfernt die reguläre Gewinnuntergrenze. Always-Buy-Truhen bilden eine ausdrücklich konfigurierte Ausnahme; Kismet kann eine zunächst zu schwache Truhe nach einem Neuwurf noch über die Grenze bringen.
 
-### Kismet Rerolls
+### Mehrere Truhen eines Durchlaufs
 
-| Setting | Standard | Effekt |
-|---|---|---|
-| **Use kismet** | aus | Wenn ein Chest unter `Reroll threshold` liegt und du eine Kismet Feather in der Inv hast, wird einmal rerollt. Danach: Buy wenn Profit ≥ `Min profit`, sonst Skip. |
-| **Reroll threshold** | 500.000 | Coins. Sollte über `Min profit` liegen, sonst feuert der Reroll nie. |
+| Einstellung | Standard | Wirkung |
+|---|---:|---|
+| **Chain claim (this run)** | Aus | Kehrt nach einem Kauf in denselben Durchlauf zurück und wählt die nächste geeignete Truhe. Zusätzliche Truhen benötigen Dungeon Chest Keys. |
 
-## Modus-Kombinationen — was tut welche Combo?
+Die Kette endet, sobald keine weitere reguläre Truhe `Min profit` erreicht und keine andere konfigurierte Ausnahme greift.
 
-| Multi-run | Chain | Use kismet | Verhalten |
+### Mehrere Durchläufe und Seiten
+
+| Einstellung | Standard | Wirkung |
+|---|---:|---|
+| **Multi-run claim** | Aus | Öffnet nacheinander noch nicht abgeholte Durchläufe und verarbeitet pro Durchlauf die beste geeignete Truhe. Zusammen mit Chain Claim können mehrere Truhen je Durchlauf gekauft werden. |
+| **Multi-run pacing** | **6 t** | Sicherheitsabstand zwischen serverabhängigen Aktionen; Wertebereich 3–20 Ticks |
+
+Sind auf der aktuellen Croesus-Seite keine offenen Durchläufe mehr vorhanden, prüft COP **Slot 53** auf eine Schaltfläche namens `Next Page`. Pro Multi-Run-Zyklus werden aus Sicherheitsgründen höchstens **fünf Seitenwechsel** ausgeführt. Nach jedem Wechsel wartet das Modul erneut auf vollständig geladene Slot-Daten.
+
+`Multi-run pacing` wird an zwei Stellen verwendet:
+
+- Nachdem die Croesus-Liste in den Slots 4 und 49 als geladen erkannt wurde, wartet COP standardmäßig weitere 6 Ticks vor dem nächsten Klick.
+- Nach einem Kauf muss `mc.screen` für dieses Intervall vollständig `null` bleiben, bevor COP Croesus erneut anspricht.
+
+Die NPC-Interaktion ist daher **kein allgemeiner Schritt nach jedem Kauf**. Öffnet der Server direkt den Durchlauf oder die Croesus-Liste, navigiert COP dort weiter. Nur wenn das Menü vollständig geschlossen bleibt, wird der Croesus-NPC in bis zu sechs Blöcken Entfernung erneut angesprochen.
+
+### Kismet-Neuwürfe
+
+| Einstellung | Standard | Wirkung |
+|---|---:|---|
+| **Use kismet** | Aus | Verwendet höchstens eine Kismet Feather für die aktuell ausgewählte Truhe, wenn deren Gewinn unter dem Neuwurf-Limit liegt |
+| **Reroll threshold** | 500.000 Coins | Unterhalb dieses Werts kann ein Neuwurf ausgelöst werden |
+
+Voraussetzungen für einen Neuwurf:
+
+- `Use kismet` ist aktiv;
+- der Gewinn liegt unter `Reroll threshold`;
+- im 36-Slot-Hauptinventar liegt eine Kismet Feather;
+- die Truhe wurde in diesem Ablauf noch nicht neu gewürfelt;
+- es handelt sich **nicht** um eine Always-Buy-Truhe.
+
+Nach einem Neuwurf kauft COP nur, wenn der neue Gewinn `Min profit` erreicht. Andernfalls geht das Modul zurück und setzt den Ablauf mit einer anderen Truhe oder dem nächsten Durchlauf fort. Die eingesetzte Kismet Feather ist dann bereits verbraucht.
+
+## Kombinationen
+
+| Multi-run | Chain | Kismet | Verhalten |
 |---|---|---|---|
-| off | off | off | **Phase 3a:** 1 Chest, 1 Run. Keybind in Run-Screen drücken. |
-| off | on | off | **Phase 3b:** alle Chests in EINEM Run, solange Profit > Min und Keys da sind. |
-| on | off | off | **Phase 3c:** 1 Chest pro Run, durch alle unclaimed Runs auf Seite 1. |
-| on | on | off | 3b+3c kombiniert — voll auto MIT Keys. |
-| on | off | on | 3c + Kismet-Upgrade auf jedem marginalen Chest. **Setup für Keyless Profit-Maxing.** |
-| on | on | on | Komplettes Setup für Key-User mit Kismets. |
+| Aus | Aus | Aus | Eine geeignete Truhe im geöffneten Durchlauf |
+| Aus | An | Aus | Mehrere geeignete Truhen desselben Durchlaufs; zusätzliche Truhen benötigen Keys |
+| An | Aus | Aus | Eine geeignete Truhe pro Durchlauf, einschließlich unterstützter Folgeseiten |
+| An | An | Aus | Mehrere geeignete Truhen über mehrere Durchläufe und Seiten |
+| An | Aus | An | Eine Truhe pro Durchlauf mit optionalem Kismet-Neuwurf |
+| An | An | An | Mehrere Truhen und Durchläufe mit optionalen Neuwürfen |
 
-## Commands
+## Befehle
 
-Alle laufen über `/cop`.
+Alle Nutzerbefehle beginnen mit `/cop`.
 
-### `/cop loot [today|week|all|reset]`
+### Loot-Zusammenfassung
 
-Summary über das Loot-Log. Default `today`.
-
-```
-/cop loot
-  → Auto Croesus loot (today • 10 chests across 10 runs)
-    Spent: 8.50M  Earned: 15.68M  Profit: +7.18M  Kismets: 0
-    By tier:
-      Bedrock x1  profit +5.18M
-      ...
-    Top items:
-      Recombobulator 3000  10.61M
-      ...
-
-/cop loot reset
-  → leert das Log
+```text
+/cop loot [today|week|all|reset]
 ```
 
-Die Log-Datei liegt unter `config/cop/croesus-loot.jsonl` —
-append-only JSON Lines, ein Chest pro Zeile. Backup-bar.
+- `today` ist der Standard und umfasst die **rollierenden letzten 24 Stunden**, nicht den aktuellen Kalendertag.
+- `week` umfasst die **rollierenden letzten 7 Tage**, nicht die laufende Kalenderwoche.
+- `all` wertet die gesamte vorhandene Logdatei aus.
+- `reset` leert die Logdatei unmittelbar. Erstelle vorher bei Bedarf eine Sicherung.
 
-### `/cop alwaysbuy [list|add|remove|clear] [SKYBLOCK_ID]`
+Die Ausgabe enthält Anzahl der Truhen und Durchläufe, Kosten, Wert, Gewinn, verbrauchte Kismets, eine Aufteilung nach Truhentyp sowie die wertvollsten Gegenstände. Die Datei liegt unter `config/cop/croesus-loot.jsonl` und verwendet JSON Lines: ein erfolgreicher Kauf pro Zeile. Fehlerhafte Einzelzeilen werden beim Lesen protokolliert und übersprungen.
 
-Items die du **immer** willst, egal ob der Chest profitabel ist.
+> [!NOTE]
+> `/cop loot all` zeigt Anzeigenamen und Summen, aber keine verlässliche Liste der SkyBlock-IDs. Verwende diesen Befehl daher **nicht** als ID-Quelle für Always Buy oder Worthless.
 
+### Always Buy
+
+```text
+/cop alwaysbuy [list|add|remove|clear] [SKYBLOCK_ID]
 ```
+
+Enthält mindestens eine Truhe einen Eintrag aus dieser Liste, wählt COP unter den passenden Truhen die mit dem höchsten Gewinn. Dabei wird `Min profit` ignoriert. Eine Always-Buy-Truhe wird bewusst direkt gekauft und **niemals mit Kismet neu gewürfelt**, auch wenn `Use kismet` aktiv ist.
+
+```text
 /cop alwaysbuy add RECOMBOBULATOR_3000
-/cop alwaysbuy add HYPERION
 /cop alwaysbuy list
-  → Croesus alwaysbuy list (2):
-      RECOMBOBULATOR_3000
-      HYPERION
 ```
 
-Wenn ein Chest mindestens ein Listen-Item enthält:
-- wird er den anderen Chests vorgezogen,
-- wird **Min profit ignoriert** (Chest wird auch bei -1M Profit geclaimt).
-- Kismet-Logik gilt weiter, falls aktiviert.
+### Worthless
 
-Im Chat sichtbar als oranges `★ AutoCroesus: claiming … (always-buy item present)`.
-
-### `/cop worthless [list|add|remove|clear] [SKYBLOCK_ID]`
-
-Items die du nicht verkaufen wirst — werden in der Profit-Rechnung
-als 0 gewertet. Praktisch für Hot Potato Books, Fuming etc. wenn
-du schon overcapped bist.
-
+```text
+/cop worthless [list|add|remove|clear] [SKYBLOCK_ID]
 ```
+
+Gelistete Gegenstände werden bei der Gewinnberechnung mit einem Wert von 0 angesetzt. Das beeinflusst Overlay, Auswahl, `Min profit`, `Reroll threshold` und den im Loot-Log gespeicherten berechneten Wert.
+
+```text
 /cop worthless add HOT_POTATO_BOOK
 /cop worthless add FUMING_POTATO_BOOK
 ```
 
-Wirkt sich auf **Overlay**, **Min profit**, **Reroll threshold** und
-**Loot-Log** aus — überall wo Profit berechnet wird.
+Die Befehle wandeln Eingaben in Großbuchstaben um und ersetzen Leerzeichen durch Unterstriche. Aus `recombobulator 3000` wird beispielsweise `RECOMBOBULATOR_3000`.
 
-## IDs herausfinden
+## SkyBlock-IDs ermitteln
 
-Die Lists wollen Skyblock-IDs (Uppercase, mit Unterstrichen). Drei Wege:
+Verwende eine kanonische SkyBlock-ID, nicht nur den sichtbaren Gegenstandsnamen.
 
-1. **Loot-Log Top Items** — `/cop loot all` zeigt Top-Items mit ihrem ID-relevanten Namen.
-2. **Debug Dump** — im Croesus-Menü Debug-Taste drücken, im `latest.log` siehst du `name="..." id="..."` für jeden Slot.
-3. **Bekannte IDs** — z.B. `HYPERION`, `WITHER_BLADE`, `RECOMBOBULATOR_3000`, `FUMING_POTATO_BOOK`, `KISMET_FEATHER`, `ENCHANTMENT_ULTIMATE_WISE_5`.
+1. Nach einem eigenen Kauf steht die ID im Feld `items[].id` der lokalen Datei `config/cop/croesus-loot.jsonl`.
+2. Der **Debug dump key** schreibt für Gegenstände im 36-Slot-Hauptinventar `name="…" id="…"` nach `latest.log`.
+3. Bekannte Beispiele sind `RECOMBOBULATOR_3000`, `FUMING_POTATO_BOOK`, `KISMET_FEATHER` und `ENCHANTMENT_ULTIMATE_WISE_5`.
 
-Die Commands uppercasen + ersetzen Leerzeichen mit `_` automatisch — du
-kannst `add recombobulator 3000` schreiben, gespeichert wird `RECOMBOBULATOR_3000`.
+Prüfe die ID vor dem Eintragen. Eine falsche ID wird gespeichert, kann aber nie mit einem Truheninhalt übereinstimmen.
 
-## Wie's intern funktioniert (Quick Reference)
+## Technischer Ablauf und Synchronisation
 
-State-Machine in `AutoCroesus.kt`:
+Vereinfacht arbeitet der Treiber als Zustandsautomat:
 
-```
-IDLE
- → tryStartClaim (Keybind in Run-Screen)
- → AWAIT_CONFIRM (Tier geklickt, warte auf Buy-Confirm)
- → [decideBuyOrReroll]
-     ├─ Kismet path → AWAIT_REROLL_RESULT → re-decide
-     ├─ Buy → AWAIT_AFTER_BUY (multi-run) / AWAIT_NEXT_PARSE (chain) / IDLE
-     └─ Skip → click Go Back → AWAIT_NEXT_PARSE
- → AWAIT_AFTER_BUY → mc.screen=null detector → tryReopenCroesus (entity click)
- → AWAIT_CROESUS_LIST → poll for slot 4 + slot 49 populated + 10t sync delay
- → click next unclaimed → AWAIT_RUN_SCREEN
- → ...
+```text
+Leerlauf
+  → Truhenstufe im Durchlauf anklicken
+  → Bestätigungsmenü abwarten und verifizieren
+  → optional einmal mit Kismet neu würfeln
+  → kaufen oder zurückgehen
+  → optional nächste Truhe, nächster Durchlauf oder nächste Seite
 ```
 
-Wichtige Timing-Hacks:
-- **`multiRunPacing` (default 6 t)** auf Croesus-Liste — Hypixel rejected sonst Klicks weil `lastStateId` noch nicht synct ist. Gleicher Wert auch als "kein Screen für N Ticks = Menü zu" Detector im post-Buy-Pfad.
-- **15 t Sync-Delay** nach Reroll-Klick — sonst parsen wir die alten Slot-31 Lore-Daten.
-- **10 t Sync-Delay** auf buy-confirm in der Kismet-Path — wartet auf Slot-31 Lore vor parse.
+Wichtige Schutzmaßnahmen:
 
-Loot-Persistence: `CroesusLootLog.append()` schreibt eine Zeile pro Chest
-als JSON in `config/cop/croesus-loot.jsonl`. Reads sind line-by-line,
-malformed Lines werden geloggt und übersprungen.
+- **10 Ticks Bestätigungs-Synchronisation:** Jedes neu geöffnete Bestätigungsmenü wartet zunächst 10 Ticks. Erst wenn Slot 31 eine `Cost`-Zeile enthält und die Truhenstufe der zuvor gewählten Stufe entspricht, darf gekauft oder neu gewürfelt werden.
+- **15 Ticks Kismet-Synchronisation:** Nach einem Neuwurf wartet COP mindestens 15 Ticks und verlangt veränderte Lore in Slot 31, bevor der neue Gewinn bewertet wird.
+- **6 Ticks Croesus-Synchronisation:** Die Multi-Run-Voreinstellung wartet nach geladenen Listen-Slots und beim Erkennen eines vollständig geschlossenen Menüs jeweils `multiRunPacing` Ticks.
+- **Seitenlimit:** `Next Page` wird ausschließlich in Slot 53 erkannt; nach fünf Seitenwechseln endet die automatische Seitennavigation.
+- **Sicherer Abbruch:** Nicht lesbare oder widersprüchliche Bestätigungsdaten führen zum Abbruch, nicht zu einem blinden Kauf.
 
-Lists: `CroesusLists.alwaysBuy` / `.worthless` sind `MutableList<String>`,
-persistiert via `configList()` in `config/cop/croesus-{alwaysbuy,worthless}.json`.
+## Bekannte Grenzen
 
-## Bekannte Limits
-
-- **Page 1 only** — Multi-Run scannt nur die aktuell sichtbare Croesus-Seite. Wenn du >50 Runs hast, muss Page 2 manuell aufgemacht werden. (Phase 3d, kein Termin.)
-- **Kein Sack-Scan** — Kismet-Detection läuft nur über die 36 Hauptinventar-Slots, nicht über Sack of Sacks oder Ender Chest.
-- **Run-Count vor Stand mai 2026** — Loot-Entries vor dem `runId`-Field nutzen einen `floor@minute`-Bucket-Fallback und können bei Multi-Run-Cycles untercounten. Neue Entries sind genau.
-- **Kein "already bought" Check** für Chests die in einer früheren Session schon gerollt wurden — der Reroll-Click ginge raus, würde aber serverseitig still failen.
+- Kismet Feathers werden nur im 36-Slot-Hauptinventar erkannt, nicht in Sacks, Ender Chest oder anderen Speichern.
+- Die Seitennavigation hängt vom englischen Namen `Next Page` in Slot 53 ab und ist auf fünf Wechsel pro Zyklus begrenzt.
+- Menü- und Lore-Erkennung sind von den aktuellen Hypixel-Titeln und -Texten abhängig.
+- Preisberechnungen hängen von erreichbaren und aktuellen Hypixel-/Coflnet-Daten ab.
+- Alte Loot-Einträge ohne `runId` gruppieren Durchläufe ersatzweise nach Dungeon-Ebene und Minute; mehrere alte Durchläufe derselben Ebene innerhalb einer Minute können deshalb unterzählt werden.

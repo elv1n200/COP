@@ -149,7 +149,7 @@ abstract class Module(
         return Location.subarea?.contains(subarea, true) == true
     }
 
-    fun inEnvironment(): Boolean = area?.inArea() ?: true && inSubarea()
+    fun inEnvironment(): Boolean = (area?.inArea() ?: true) && inSubarea()
 
     protected inline fun <reified T : Event> on(priority: Int = 0, noinline cb: T.() -> Unit) {
         events.add(EventBus.on<T>(priority, {
@@ -176,8 +176,13 @@ abstract class Module(
     }
 
     private companion object {
-        private fun getCategory(clazz: Class<out Module>): Category? =
-            Category.entries.find { clazz.`package`.name.contains(it.name, true) }
+        private fun getCategory(clazz: Class<out Module>): Category? {
+            val packageName = clazz.`package`?.name ?: return null
+            val prefix = "cop.module.impl."
+            if (!packageName.startsWith(prefix)) return null
+            val categorySegment = packageName.removePrefix(prefix).substringBefore('.')
+            return Category.entries.find { it.name.equals(categorySegment, ignoreCase = true) }
+        }
 
         /** Extract the package segment immediately after the category name as
          *  the sub-category label. Returns null if the module sits directly in

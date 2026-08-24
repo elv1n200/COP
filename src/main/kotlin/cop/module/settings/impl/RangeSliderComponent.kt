@@ -76,7 +76,8 @@ class RangeSliderComponent<E>(
 
     override fun read(element: JsonElement) {
         val arr = element.asJsonArray
-        value = cast(arr[0].asNumber) to cast(arr[1].asNumber)
+        require(arr.size() == 2) { "range setting requires exactly two values" }
+        set(arr[0].asNumber, arr[1].asNumber)
     }
 
     override fun ElementScope<*>.draw(asSub: Boolean): ElementScope<*> = column(size(Copying), gap = 2.px) {

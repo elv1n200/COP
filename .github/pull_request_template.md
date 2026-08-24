@@ -1,36 +1,33 @@
-<!--
-Danke für den PR! Bitte fülle die Abschnitte unten kurz aus. Alles in
-<!-- ... --> ist nur Hilfe und wird nicht angezeigt.
--->
+## Zweck
 
-## Summary
+<!-- Problem und Lösung in 1–3 Sätzen. Verlinke das Issue: Fixes #123. -->
 
-<!--
-Was macht dieser PR? 1-3 Sätze reichen. Wenn er ein Issue schließt,
-verlink es: "Fixes #42" / "Closes #42".
--->
+## Art der Änderung
 
-## Type of change
+- [ ] Bugfix
+- [ ] Bestehende Funktion verbessert
+- [ ] Neues Feature/Modul — vorher abgestimmt
+- [ ] Refactor ohne beabsichtigte Verhaltensänderung
+- [ ] Tests / Build / CI
+- [ ] Dokumentation / Repository
 
-<!-- Mehrere möglich. -->
+## Prüfung
 
-- [ ] Bug fix
-- [ ] New feature / module
-- [ ] Refactor / cleanup (no behavior change)
-- [ ] Docs / repo hygiene
-- [ ] Build / CI
+- [ ] Ziel ist `mc26` / Minecraft 26.1.2.
+- [ ] `./gradlew :26.1.2:test` erfolgreich.
+- [ ] `./gradlew :26.1.2:build` erfolgreich.
+- [ ] Relevante Abschnitte der [Client-Test-Checkliste](https://github.com/elv1n200/COP/blob/mc26/docs/client-test-checklist.md) ausgeführt.
+- [ ] Keine privaten Daten, Binärartefakte oder generierten `versions/`-/`build/`-Dateien enthalten.
+- [ ] Neue/übernommene Drittlogik ist in Credits und Notices dokumentiert.
 
-## Tested on
+### Tatsächlich manuell getestet
 
-<!-- Welche MC-Versionen + Szenarien hast du tatsächlich gespielt? -->
+<!-- Umgebung und konkrete Szenarien. „Nicht getestet“ ist besser als eine Vermutung. -->
 
-- [ ] 1.21.10
-- [ ] 1.21.11
-- [ ] 26.1.2 (mc26 branch)
+### Nicht getestet / bekannte Risiken
 
-## Notes
+<!-- Mixins, Live-Servertexte, Rendering-Pfade, Migrationen, Plattformen usw. -->
 
-<!--
-Optional: alles was Reviewer wissen sollten. Bewusste Trade-offs,
-Sachen die du erwogen aber verworfen hast, Follow-up Ideen.
--->
+## Sichtbare Änderungen
+
+<!-- Optional: fokussierter Screenshot/Clip ohne private Daten. -->

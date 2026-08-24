@@ -106,8 +106,8 @@ object PlayerUtils {
     }
 
     fun fillItemFromSack(itemId: String, amount: Int, sackName: String) {
-        val needed = mc.player?.inventory?.find { it.skyblockId == itemId }?.count ?: 0
-        if (needed != amount) ChatUtils.command("gfs $sackName ${amount - needed}")
+        val current = getItemsAmount(itemId)
+        if (current < amount) ChatUtils.command("gfs $sackName ${amount - current}")
     }
 
 

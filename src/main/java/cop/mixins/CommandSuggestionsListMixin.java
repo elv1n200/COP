@@ -22,7 +22,7 @@ public class CommandSuggestionsListMixin {
     private String string(String string) {
         if (NickHider.INSTANCE.getEnabled()) {
             LocalPlayer player = Minecraft.getInstance().player;
-            assert player != null;
+            if (player == null) return string;
             String name = player.getName().getString();
             if (string.equals(name)) return NickHider.INSTANCE.getCustomName();
         }

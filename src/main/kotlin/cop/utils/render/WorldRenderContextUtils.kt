@@ -13,6 +13,7 @@ import net.minecraft.client.gui.Font
 //? if <= 1.21.11
 import net.minecraft.client.renderer.LightTexture
 import net.minecraft.client.renderer.MultiBufferSource
+import net.minecraft.client.renderer.RenderType
 import net.minecraft.network.chat.Component
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
@@ -32,6 +33,15 @@ import kotlin.math.sqrt
 private val ALLOCATOR = ByteBufferBuilder(1536)
 
 private fun camera() = mc.gameRenderer.mainCamera
+
+private inline fun PoseStack.withPushedPose(block: PoseStack.() -> Unit) {
+    pushPose()
+    try {
+        block()
+    } finally {
+        popPose()
+    }
+}
 
 // `Camera.position` is a public field in 1.21.10 but became private in 1.21.11.
 // The mixin accessor exposes it through one signature on both versions.
@@ -123,8 +133,10 @@ private fun PoseStack.Pose.filledBoxStrip(buffer: VertexConsumer, box: AABB, col
     for (p in v) buffer.addVertex(this, p[0], p[1], p[2]).setColor(colour)
 }
 
-private fun halfWidthOf(thickness: Float): Float =
-    max(MIN_HALF_WIDTH, thickness * THICKNESS_MULTIPLIER * 0.5f)
+private fun halfWidthOf(thickness: Float): Float {
+    if (!thickness.isFinite()) return MIN_HALF_WIDTH
+    return max(MIN_HALF_WIDTH, thickness.coerceIn(0f, 100f) * THICKNESS_MULTIPLIER * 0.5f)
+}
 
 // 26.x reworked Fabric's world-render context: WorldRenderContext.matrices()
 // /consumers() became LevelRenderContext.poseStack()/bufferSource(). The
@@ -141,7 +153,7 @@ private fun WorldRenderContext.poseStackCompat(): PoseStack? {
 
 private fun WorldRenderContext.bufferSourceCompat(): MultiBufferSource.BufferSource? {
     //? if >= 26 {
-    /*return bufferSource() as? MultiBufferSource.BufferSource*/
+    /*return bufferSource()*/
     //? } else {
     return consumers() as? MultiBufferSource.BufferSource
     //? }
@@ -154,27 +166,32 @@ fun WorldRenderContext.drawLine(points: Collection<Vec3>, colour: Colour, depth:
     val layer = if (depth) CustomRenderLayer.BILLBOARD_LINE_QUAD else CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP
     val cam = camera().pos
     val halfWidth = halfWidthOf(thickness)
+    WorldRenderBatch.beforeGeometry(this)
 
-    matrix.pushPose()
-    matrix.translate(-cam.x, -cam.y, -cam.z)
+    try {
+        matrix.withPushedPose {
+            translate(-cam.x, -cam.y, -cam.z)
 
-    val pose = matrix.last()
-    val buffer = bufferSource.getBuffer(layer)
-    val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
-    val rgb = colour.rgb
-    val pointList = points.toList()
-    for (i in 0 until pointList.size - 1) {
-        val s = pointList[i]; val e = pointList[i + 1]
-        pose.billboardLineQuad(
-            buffer,
-            s.x.toFloat(), s.y.toFloat(), s.z.toFloat(),
-            e.x.toFloat(), e.y.toFloat(), e.z.toFloat(),
-            cx, cy, cz, rgb, halfWidth,
-        )
+            val pose = last()
+            val buffer = bufferSource.getBuffer(layer)
+            val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
+            val rgb = colour.rgb
+            val iterator = points.iterator()
+            var s = iterator.next()
+            while (iterator.hasNext()) {
+                val e = iterator.next()
+                pose.billboardLineQuad(
+                    buffer,
+                    s.x.toFloat(), s.y.toFloat(), s.z.toFloat(),
+                    e.x.toFloat(), e.y.toFloat(), e.z.toFloat(),
+                    cx, cy, cz, rgb, halfWidth,
+                )
+                s = e
+            }
+        }
+    } finally {
+        WorldRenderBatch.finishGeometry(this, bufferSource, layer)
     }
-
-    matrix.popPose()
-    bufferSource.endBatch(layer)
 }
 
 fun WorldRenderContext.drawTracer(to: Vec3, colour: Colour, thickness: Float = 6f, depth: Boolean = false) {
@@ -190,47 +207,54 @@ fun WorldRenderContext.drawWireFrameBox(aabb: AABB, colour: Colour, thickness: F
     val layer = if (depth) CustomRenderLayer.BILLBOARD_LINE_QUAD else CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP
     val cam = camera().pos
     val halfWidth = halfWidthOf(thickness)
+    WorldRenderBatch.beforeGeometry(this)
 
-    matrix.pushPose()
-    matrix.translate(-cam.x, -cam.y, -cam.z)
+    try {
+        matrix.withPushedPose {
+            translate(-cam.x, -cam.y, -cam.z)
 
-    val pose = matrix.last()
-    val buffer = bufferSource.getBuffer(layer)
-    val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
-    val x1 = aabb.minX.toFloat(); val y1 = aabb.minY.toFloat(); val z1 = aabb.minZ.toFloat()
-    val x2 = aabb.maxX.toFloat(); val y2 = aabb.maxY.toFloat(); val z2 = aabb.maxZ.toFloat()
-    val rgb = colour.rgb
+            val pose = last()
+            val buffer = bufferSource.getBuffer(layer)
+            val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
+            val x1 = aabb.minX.toFloat(); val y1 = aabb.minY.toFloat(); val z1 = aabb.minZ.toFloat()
+            val x2 = aabb.maxX.toFloat(); val y2 = aabb.maxY.toFloat(); val z2 = aabb.maxZ.toFloat()
+            val rgb = colour.rgb
 
-    // bottom rectangle
-    pose.billboardLineQuad(buffer, x1, y1, z1, x2, y1, z1, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x2, y1, z1, x2, y1, z2, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x2, y1, z2, x1, y1, z2, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x1, y1, z2, x1, y1, z1, cx, cy, cz, rgb, halfWidth)
-    // top rectangle
-    pose.billboardLineQuad(buffer, x1, y2, z1, x2, y2, z1, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x2, y2, z1, x2, y2, z2, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x2, y2, z2, x1, y2, z2, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x1, y2, z2, x1, y2, z1, cx, cy, cz, rgb, halfWidth)
-    // pillars
-    pose.billboardLineQuad(buffer, x1, y1, z1, x1, y2, z1, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x2, y1, z1, x2, y2, z1, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x2, y1, z2, x2, y2, z2, cx, cy, cz, rgb, halfWidth)
-    pose.billboardLineQuad(buffer, x1, y1, z2, x1, y2, z2, cx, cy, cz, rgb, halfWidth)
-
-    matrix.popPose()
-    bufferSource.endBatch(layer)
+            // bottom rectangle
+            pose.billboardLineQuad(buffer, x1, y1, z1, x2, y1, z1, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x2, y1, z1, x2, y1, z2, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x2, y1, z2, x1, y1, z2, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x1, y1, z2, x1, y1, z1, cx, cy, cz, rgb, halfWidth)
+            // top rectangle
+            pose.billboardLineQuad(buffer, x1, y2, z1, x2, y2, z1, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x2, y2, z1, x2, y2, z2, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x2, y2, z2, x1, y2, z2, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x1, y2, z2, x1, y2, z1, cx, cy, cz, rgb, halfWidth)
+            // pillars
+            pose.billboardLineQuad(buffer, x1, y1, z1, x1, y2, z1, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x2, y1, z1, x2, y2, z1, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x2, y1, z2, x2, y2, z2, cx, cy, cz, rgb, halfWidth)
+            pose.billboardLineQuad(buffer, x1, y1, z2, x1, y2, z2, cx, cy, cz, rgb, halfWidth)
+        }
+    } finally {
+        WorldRenderBatch.finishGeometry(this, bufferSource, layer)
+    }
 }
 
 fun WorldRenderContext.drawFilledBox(box: AABB, colour: Colour, depth: Boolean = false) {
     val matrix = poseStackCompat() ?: return
     val bufferSource = bufferSourceCompat() ?: return
     val layer = if (depth) CustomRenderLayer.TRIANGLE_STRIP else CustomRenderLayer.TRIANGLE_STRIP_ESP
+    WorldRenderBatch.beforeGeometry(this)
 
-    matrix.pushPose()
-    with(camera().pos) { matrix.translate(-x, -y, -z) }
-    matrix.last().filledBoxStrip(bufferSource.getBuffer(layer), box, colour.rgb)
-    matrix.popPose()
-    bufferSource.endBatch(layer)
+    try {
+        matrix.withPushedPose {
+            with(camera().pos) { translate(-x, -y, -z) }
+            last().filledBoxStrip(bufferSource.getBuffer(layer), box, colour.rgb)
+        }
+    } finally {
+        WorldRenderBatch.finishGeometry(this, bufferSource, layer)
+    }
 }
 
 fun WorldRenderContext.drawStyledBox(style: String, box: AABB, colour: Colour, fillColour: Colour = colour, thickness: Float = 2.0f, depth: Boolean = false) {
@@ -262,34 +286,40 @@ fun WorldRenderContext.drawStyledBox(style: String, box: AABB, colour: Colour, f
 
 fun WorldRenderContext.drawText(text: Component, pos: Vec3, colour: Colour = Colour.TRANSPARENT, shadow: Boolean = true, scale: Float = 0.5f, depth: Boolean = false) {
     val stack = poseStackCompat() ?: return
-
-    stack.pushPose()
-    val matrix = stack.last().pose()
-    with(scale * 0.025f) {
-        val cameraPos = -camera().pos
-        matrix.translate(pos.toVector3f()).translate(cameraPos.x.toFloat() , cameraPos.y.toFloat(), cameraPos.z.toFloat()).rotate(camera().rotation()).scale(this, -this, this)
+    val batched = WorldRenderBatch.isActive(this)
+    val consumers = if (batched) {
+        WorldRenderBatch.textConsumers(this)
+    } else {
+        MultiBufferSource.immediate(ALLOCATOR)
     }
 
-    val consumers = MultiBufferSource.immediate(ALLOCATOR)
+    try {
+        stack.withPushedPose {
+            val matrix = last().pose()
+            with(scale * 0.025f) {
+                val cameraPos = -camera().pos
+                matrix.translate(pos.toVector3f()).translate(cameraPos.x.toFloat(), cameraPos.y.toFloat(), cameraPos.z.toFloat()).rotate(camera().rotation()).scale(this, -this, this)
+            }
 
-    mc.font?.let {
-        // LightTexture was renamed to Lightmap in 26.x and FULL_BRIGHT no
-        // longer lives there; the value is the stable packed lightmap
-        // constant 0xF000F0 (full block + sky light).
-        //? if >= 26 {
-        /*val fullBright = 0xF000F0
-        *///? } else {
-        val fullBright = LightTexture.FULL_BRIGHT
-        //? }
-        it.drawInBatch(
-            text, -it.width(text) / 2f, 0f, -1, shadow, matrix, consumers,
-            if (depth) Font.DisplayMode.NORMAL else Font.DisplayMode.SEE_THROUGH,
-            colour.rgb, fullBright
-        )
+            mc.font.let { font ->
+                // LightTexture was renamed to Lightmap in 26.x and FULL_BRIGHT no
+                // longer lives there; the value is the stable packed lightmap
+                // constant 0xF000F0 (full block + sky light).
+                //? if >= 26 {
+                /*val fullBright = 0xF000F0
+                *///? } else {
+                val fullBright = LightTexture.FULL_BRIGHT
+                //? }
+                font.drawInBatch(
+                    text, -font.width(text) / 2f, 0f, -1, shadow, matrix, consumers,
+                    if (depth) Font.DisplayMode.NORMAL else Font.DisplayMode.SEE_THROUGH,
+                    colour.rgb, fullBright
+                )
+            }
+        }
+    } finally {
+        if (!batched) consumers.endBatch()
     }
-
-    consumers.endBatch()
-    stack.popPose()
 }
 
 fun WorldRenderContext.drawCylinder(
@@ -301,39 +331,115 @@ fun WorldRenderContext.drawCylinder(
     thickness: Float = 5f,
     depth: Boolean = false
 ) {
+    if (segments < 3 || radius <= 0f || !radius.isFinite() || !height.isFinite()) return
     val matrix = poseStackCompat() ?: return
     val bufferSource = bufferSourceCompat() ?: return
     val layer = if (depth) CustomRenderLayer.BILLBOARD_LINE_QUAD else CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP
     val cam = camera().pos
     val halfWidth = halfWidthOf(thickness)
+    WorldRenderBatch.beforeGeometry(this)
 
-    matrix.pushPose()
-    matrix.translate(-cam.x, -cam.y, -cam.z)
+    try {
+        matrix.withPushedPose {
+            translate(-cam.x, -cam.y, -cam.z)
 
-    val pose = matrix.last()
-    val buffer = bufferSource.getBuffer(layer)
-    val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
-    val centerX = center.x.toFloat()
-    val centerY = center.y.toFloat()
-    val centerZ = center.z.toFloat()
-    val topY = centerY + height
-    val rgb = colour.rgb
+            val pose = last()
+            val buffer = bufferSource.getBuffer(layer)
+            val cx = cam.x.toFloat(); val cy = cam.y.toFloat(); val cz = cam.z.toFloat()
+            val centerX = center.x.toFloat()
+            val centerY = center.y.toFloat()
+            val centerZ = center.z.toFloat()
+            val topY = centerY + height
+            val rgb = colour.rgb
 
-    val angleStep = 2.0 * Math.PI / segments
-    for (i in 0 until segments) {
-        val a1 = i * angleStep
-        val a2 = (i + 1) * angleStep
-        val x1 = centerX + (radius * kotlin.math.cos(a1)).toFloat()
-        val z1 = centerZ + (radius * kotlin.math.sin(a1)).toFloat()
-        val x2 = centerX + (radius * kotlin.math.cos(a2)).toFloat()
-        val z2 = centerZ + (radius * kotlin.math.sin(a2)).toFloat()
+            val angleStep = 2.0 * Math.PI / segments
+            for (i in 0 until segments) {
+                val a1 = i * angleStep
+                val a2 = (i + 1) * angleStep
+                val x1 = centerX + (radius * kotlin.math.cos(a1)).toFloat()
+                val z1 = centerZ + (radius * kotlin.math.sin(a1)).toFloat()
+                val x2 = centerX + (radius * kotlin.math.cos(a2)).toFloat()
+                val z2 = centerZ + (radius * kotlin.math.sin(a2)).toFloat()
 
-        // top ring edge, bottom ring edge, vertical pillar
-        pose.billboardLineQuad(buffer, x1,    topY, z1, x2,    topY, z2, cx, cy, cz, rgb, halfWidth)
-        pose.billboardLineQuad(buffer, x1, centerY, z1, x2, centerY, z2, cx, cy, cz, rgb, halfWidth)
-        pose.billboardLineQuad(buffer, x1, centerY, z1, x1,    topY, z1, cx, cy, cz, rgb, halfWidth)
+                // top ring edge, bottom ring edge, vertical pillar
+                pose.billboardLineQuad(buffer, x1,    topY, z1, x2,    topY, z2, cx, cy, cz, rgb, halfWidth)
+                pose.billboardLineQuad(buffer, x1, centerY, z1, x2, centerY, z2, cx, cy, cz, rgb, halfWidth)
+                pose.billboardLineQuad(buffer, x1, centerY, z1, x1,    topY, z1, cx, cy, cz, rgb, halfWidth)
+            }
+        }
+    } finally {
+        WorldRenderBatch.finishGeometry(this, bufferSource, layer)
+    }
+}
+
+/**
+ * Consolidates compatible, consecutive COP draw calls. Cross-source barriers
+ * preserve the caller's geometry/text blend order; Minecraft may still flush
+ * non-consolidatable modes such as triangle strips between primitives.
+ * Rendering is single-threaded, and context identity prevents state from
+ * leaking into an unexpected nested render callback.
+ */
+private object WorldRenderBatch {
+    private var activeContext: WorldRenderContext? = null
+    private var sharedTextConsumers: MultiBufferSource.BufferSource? = null
+
+    fun render(context: WorldRenderContext, render: () -> Unit) {
+        if (activeContext === context) {
+            render()
+            return
+        }
+        check(activeContext == null) { "Nested COP world rendering used a different context" }
+
+        activeContext = context
+        try {
+            render()
+        } finally {
+            try {
+                context.bufferSourceCompat()?.let(::flushGeometry)
+            } finally {
+                try {
+                    flushText()
+                } finally {
+                    activeContext = null
+                }
+            }
+        }
     }
 
-    matrix.popPose()
-    bufferSource.endBatch(layer)
+    fun isActive(context: WorldRenderContext): Boolean = activeContext === context
+
+    fun beforeGeometry(context: WorldRenderContext) {
+        if (isActive(context)) flushText()
+    }
+
+    fun textConsumers(context: WorldRenderContext): MultiBufferSource.BufferSource {
+        check(isActive(context)) { "Shared text buffers requested outside the active render context" }
+        context.bufferSourceCompat()?.let(::flushGeometry)
+        return sharedTextConsumers
+            ?: MultiBufferSource.immediate(ALLOCATOR).also { sharedTextConsumers = it }
+    }
+
+    fun finishGeometry(
+        context: WorldRenderContext,
+        source: MultiBufferSource.BufferSource,
+        layer: RenderType,
+    ) {
+        if (!isActive(context)) source.endBatch(layer)
+    }
+
+    private fun flushGeometry(source: MultiBufferSource.BufferSource) {
+        source.endBatch(CustomRenderLayer.BILLBOARD_LINE_QUAD)
+        source.endBatch(CustomRenderLayer.BILLBOARD_LINE_QUAD_ESP)
+        source.endBatch(CustomRenderLayer.TRIANGLE_STRIP)
+        source.endBatch(CustomRenderLayer.TRIANGLE_STRIP_ESP)
+    }
+
+    private fun flushText() {
+        val consumers = sharedTextConsumers ?: return
+        sharedTextConsumers = null
+        consumers.endBatch()
+    }
 }
+
+/** Flushes pending COP world-render buffers after all listeners ran. */
+fun WorldRenderContext.renderCopWorld(render: () -> Unit) = WorldRenderBatch.render(this, render)

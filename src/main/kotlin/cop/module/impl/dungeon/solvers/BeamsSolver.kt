@@ -69,8 +69,8 @@ object BeamsSolver {
     private fun recalculateLanternPairs(room: OdonRoom) {
         currentLanternPairs.clear()
         lanternPairs.forEachIndexed { index, list ->
-            val pos = room.getRealCoords(BlockPos(list[0], list[1], list[2]))?.takeIf { mc.level?.getBlockState(it)?.block == Blocks.SEA_LANTERN } ?: return@forEachIndexed
-            val pos2 = room.getRealCoords(BlockPos(list[3], list[4], list[5]))?.takeIf { mc.level?.getBlockState(it)?.block == Blocks.SEA_LANTERN } ?: return@forEachIndexed
+            val pos = room.getRealCoords(BlockPos(list[0], list[1], list[2])).takeIf { mc.level?.getBlockState(it)?.block == Blocks.SEA_LANTERN } ?: return@forEachIndexed
+            val pos2 = room.getRealCoords(BlockPos(list[3], list[4], list[5])).takeIf { mc.level?.getBlockState(it)?.block == Blocks.SEA_LANTERN } ?: return@forEachIndexed
 
             currentLanternPairs[pos] = pos2 to colours[index % colours.size]
         }

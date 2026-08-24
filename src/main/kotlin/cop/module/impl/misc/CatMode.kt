@@ -65,16 +65,19 @@ object CatMode : Module(
             if (!meowSound || packet.sound == catAmbientSound) return@on
 
             cancel()
-            mc.level?.playLocalSound(
-                packet.x,
-                packet.y,
-                packet.z,
-                catAmbientSound.value(),
-                packet.source,
-                packet.volume,
-                packet.pitch,
-                false
-            )
+            mc.execute {
+                if (!enabled || !meowSound) return@execute
+                mc.level?.playLocalSound(
+                    packet.x,
+                    packet.y,
+                    packet.z,
+                    catAmbientSound.value(),
+                    packet.source,
+                    packet.volume,
+                    packet.pitch,
+                    false
+                )
+            }
         }
     }
 

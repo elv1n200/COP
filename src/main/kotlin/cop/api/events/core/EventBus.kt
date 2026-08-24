@@ -14,6 +14,7 @@ import cop.api.skyblock.dungeon.Dungeon
 import cop.api.skyblock.dungeon.Dungeon.dungeonItemDrops
 import cop.utils.StringUtils.containsOneOf
 import cop.utils.equalsOneOf
+import cop.utils.render.renderCopWorld
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
@@ -41,10 +42,15 @@ import cop.CopMod
 import cop.utils.ui.rendering.NVGSpecialRenderer
 import java.util.concurrent.ConcurrentHashMap
 
-// modified zen, their repo is taken down.
+/**
+ * COP's Fabric-to-module event bridge. Early project history mentioned an
+ * unavailable "Zen" reference; the current lifecycle wiring, cached dispatch,
+ * failure isolation and listener ownership are COP-specific implementations.
+ */
 object EventBus { // todo cleanup
     val events = ConcurrentHashMap<Class<*>, EventHandlers>()
     data class PrioritisedCallback<T>(val priority: Int, val callback: T.() -> Unit)
+    private val reportedFailures = ConcurrentHashMap.newKeySet<PrioritisedCallback<*>>()
     var totalTicks = 0
         private set
 
@@ -58,15 +64,17 @@ object EventBus { // todo cleanup
      * @author elvin
      */
     class EventHandlers {
-        private val live = ConcurrentHashMap.newKeySet<PrioritisedCallback<*>>()
+        private val live = LinkedHashSet<PrioritisedCallback<*>>()
         @Volatile private var cached: List<PrioritisedCallback<*>> = emptyList()
 
+        @Synchronized
         fun add(c: PrioritisedCallback<*>): Boolean {
             val added = live.add(c)
             if (added) refresh()
             return added
         }
 
+        @Synchronized
         fun remove(c: PrioritisedCallback<*>): Boolean {
             val removed = live.remove(c)
             if (removed) refresh()
@@ -78,7 +86,7 @@ object EventBus { // todo cleanup
         }
 
         fun snapshot(): List<PrioritisedCallback<*>> = cached
-        fun isEmpty(): Boolean = live.isEmpty()
+        fun isEmpty(): Boolean = cached.isEmpty()
     }
 
     private var lastWorld: ClientLevel? = null
@@ -100,7 +108,11 @@ object EventBus { // todo cleanup
         }
         ClientTickEvents.END_CLIENT_TICK.register { if (mc.level != null && mc.player != null) TickEvent.End().post() }
 
-        WorldRenderEvents.END_MAIN.register { if (mc.level != null && mc.player != null) RenderEvent.World(it).post() }
+        WorldRenderEvents.END_MAIN.register { context ->
+            if (mc.level != null && mc.player != null) {
+                context.renderCopWorld { RenderEvent.World(context).post() }
+            }
+        }
 
         ClientLifecycleEvents.CLIENT_STARTED.register { GameEvent.Load().post() }
         ClientLifecycleEvents.CLIENT_STOPPING.register { GameEvent.Unload().post() }
@@ -148,39 +160,74 @@ object EventBus { // todo cleanup
     fun onPacketReceived(packet: Packet<*>): Boolean {
         if (PacketEvent.Received(packet).post()) return true
 
-        return when (packet) {
-            is ClientboundPingPacket -> {
-                if (packet.id >= 0) return false
-                totalTicks++
-                TickEvent.Server(totalTicks).post()
-            }
+        // Chat packet events remain synchronous because their public contract
+        // is cancellable. All non-cancellable derived work is dispatched below.
+        val cancelled = when (packet) {
             is ClientboundSystemChatPacket -> {
                 val text = packet.content
                 if (packet.overlay) ChatEvent.ActionBar(text.string, text).post() else ChatEvent.Packet(text.string, text).post()
             }
+            else -> false
+        }
+
+        // Netty retains synchronous cancellation above. Only after every
+        // cancellable pre-handler has accepted the packet do ordinary
+        // observers receive it on the client thread. This notification is
+        // pre-vanilla-state: it preserves the old observation point and does
+        // not promise that the vanilla packet handler has already run.
+        if (!cancelled && (
+                events[PacketEvent.ReceivedClient::class.java]?.isEmpty() == false ||
+                    packet is ClientboundPingPacket ||
+                    packet is ClientboundTakeItemEntityPacket ||
+                    packet is ClientboundRemoveEntitiesPacket ||
+                    packet is ClientboundSoundPacket ||
+                    packet is ClientboundSystemChatPacket
+                )
+        ) {
+            mc.execute {
+                PacketEvent.ReceivedClient(packet).post()
+                onPacketReceivedClient(packet)
+            }
+        }
+        return cancelled
+    }
+
+    private fun onPacketReceivedClient(packet: Packet<*>) {
+        when (packet) {
+            is ClientboundSystemChatPacket -> {
+                val text = packet.content
+                if (packet.overlay) ChatEvent.ActionBarClient(text.string, text).post()
+                else ChatEvent.PacketClient(text.string, text).post()
+            }
+            is ClientboundPingPacket -> {
+                if (packet.id < 0) {
+                    totalTicks++
+                    TickEvent.Server(totalTicks).post()
+                }
+            }
             is ClientboundTakeItemEntityPacket -> {
-                if (mc.player == null || !Dungeon.inClear) return false
-                val itemEntity = mc.level?.getEntity(packet.itemId) as? ItemEntity ?: return false
-                if (itemEntity.item?.hoverName?.string?.containsOneOf(dungeonItemDrops, true) == true && itemEntity.distanceTo(mc.player as Entity) <= 6)
-                    DungeonEvent.Secret.Item(itemEntity).post()
-                else false
+                val player = mc.player ?: return
+                if (!Dungeon.inClear) return
+                val itemEntity = mc.level?.getEntity(packet.itemId) as? ItemEntity ?: return
+                if (itemEntity.item.hoverName.string.containsOneOf(dungeonItemDrops, true) &&
+                    itemEntity.distanceTo(player as Entity) <= 6
+                ) DungeonEvent.Secret.Item(itemEntity).post()
             }
             is ClientboundRemoveEntitiesPacket -> {
-                if (mc.player == null || !Dungeon.inClear) return false
+                val player = mc.player ?: return
+                if (!Dungeon.inClear) return
                 packet.entityIds.forEach { id ->
                     val entity = mc.level?.getEntity(id) as? ItemEntity ?: return@forEach
-                    if (entity.item?.hoverName?.string?.containsOneOf(dungeonItemDrops, true) == true && entity.distanceTo(mc.player as Entity) <= 6)
-                        DungeonEvent.Secret.Item(entity).post()
+                    if (entity.item.hoverName.string.containsOneOf(dungeonItemDrops, true) &&
+                        entity.distanceTo(player as Entity) <= 6
+                    ) DungeonEvent.Secret.Item(entity).post()
                 }
-                false
             }
             is ClientboundSoundPacket -> {
-                if (!Dungeon.inClear) return false
-                if (packet.sound.value().equalsOneOf(SoundEvents.BAT_HURT, SoundEvents.BAT_DEATH) && packet.volume == 0.1f)
+                if (Dungeon.inClear && packet.sound.value().equalsOneOf(SoundEvents.BAT_HURT, SoundEvents.BAT_DEATH) && packet.volume == 0.1f) {
                     DungeonEvent.Secret.Bat(packet).post()
-                else false
+                }
             }
-            else -> false
         }
     }
 
@@ -234,7 +281,12 @@ object EventBus { // todo cleanup
                 @Suppress("UNCHECKED_CAST")
                 (handler.callback as (T) -> Unit)(event)
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (reportedFailures.add(handler)) {
+                    CopMod.logger.error(
+                        "Event listener failed for ${event::class.java.name}; suppressing repeat errors from this listener",
+                        e,
+                    )
+                }
             }
         }
         return if (event is CancellableEvent) event.isCancelled() else false
@@ -249,8 +301,20 @@ object EventBus { // todo cleanup
         private val callback: PrioritisedCallback<*>,
         private val handlers: EventHandlers
     ) : EventListener {
-        override fun remove(): Boolean = handlers.remove(callback)
-        override fun add(): Boolean = handlers.add(callback)
+        override fun remove(): Boolean = handlers.remove(callback).also { removed ->
+            if (removed) reportedFailures.remove(callback)
+        }
+
+        override fun add(): Boolean = handlers.add(callback).also { added ->
+            if (added) reportedFailures.remove(callback)
+        }
+    }
+
+    @JvmStatic
+    fun onPacketReceivedPost(packet: Packet<*>) {
+        if (events[PacketEvent.ReceivedPost::class.java]?.isEmpty() == false) {
+            mc.execute { PacketEvent.ReceivedPost(packet).post() }
+        }
     }
 }
 

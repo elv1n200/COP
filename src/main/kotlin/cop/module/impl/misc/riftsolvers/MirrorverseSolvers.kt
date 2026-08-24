@@ -38,7 +38,7 @@ object MirrorverseSolvers : Module(
             if (redGreen)   RedGreenSolver.onTick(player, rgAction, rgInteract)
         }
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             when (packet) {
                 is ClientboundSoundPacket -> {
                     if (tinyDancer) TinyDancerSolver.onSound(packet)
@@ -60,7 +60,7 @@ object MirrorverseSolvers : Module(
             if (craftRoom && craftRecipe) CraftRoomSolver.onContainer(ctx, player)
         }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             if (lavaMaze) LavaMazeSolver.onMessage(message)
             if (parkour)  ParkourSolver.onMessage(message)
         }

@@ -38,19 +38,24 @@ object Location {
 
     val onModernIsland: Boolean get() = currentArea.equalsOneOf(Island.ThePark, Island.Galatea, Island.Hub, Island.SpiderDen)
 
+    fun isHypixelAddress(address: String): Boolean {
+        val host = address.trim().substringBefore(':').trimEnd('.').lowercase()
+        return host == "hypixel.net" || host.endsWith(".hypixel.net")
+    }
+
     private val teamRegex = Regex("^team_(\\d+)$")
     private val subAreaRegex = Regex("^ ([⏣ф]) .*")
     private val serverIdRegex = Regex("\\d\\d/\\d\\d/\\d\\d (\\w{0,6}) *")
 
     init {
-        EventBus.on<PacketEvent.Received> {
+        EventBus.on<PacketEvent.ReceivedClient> {
             when (packet) {
                 is ClientboundPlayerInfoUpdatePacket -> {
                     if (!currentArea.isArea(Island.Unknown) || packet.actions()
                             .none { it.equalsOneOf(ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME,) }
                     ) return@on
-                    val area = packet.entries()?.find {
-                        it?.displayName?.string?.startsWithOneOf(
+                    val area = packet.entries().find {
+                        it.displayName?.string?.startsWithOneOf(
                             "Area: ",
                             "Dungeon: "
                         ) == true
@@ -66,8 +71,8 @@ object Location {
                     if (!inSkyblock) inSkyblock = onHypixel && packet.objectiveName == "SBScoreboard" || ClickGui.forceSkyblock
 
                 is ClientboundSetPlayerTeamPacket -> {
-                    val team = packet.parameters?.orElse(null) ?: return@on
-                    val text = team.playerPrefix?.string?.noControlCodes?.plus(team.playerSuffix?.string?.noControlCodes) ?: return@on
+                    val team = packet.parameters.orElse(null) ?: return@on
+                    val text = team.playerPrefix.string.noControlCodes + team.playerSuffix.string.noControlCodes
 
                     if (packet.name.matches(teamRegex) && text.matches(subAreaRegex) && text.lowercase() != subarea) {
                         subarea = text.lowercase()
@@ -100,7 +105,7 @@ object Location {
                 currentArea = Island.SinglePlayer
                 return@on
             }
-            onHypixel = mc.runCatching { ip.contains("hypixel", true) }.getOrDefault(false)
+            onHypixel = mc.runCatching { isHypixelAddress(ip) }.getOrDefault(false)
         }
 
         EventBus.on<ServerEvent.Disconnect> {

@@ -8,6 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 object Scheduler {
     private val clientTasks = mutableListOf<Task>()
     private val serverTasks = mutableListOf<Task>()
+    private val taskLock = Any()
 
     data class Task(
         var delay: Int,
@@ -15,8 +16,10 @@ object Scheduler {
         val cb: (Task) -> Unit
     ) {
         fun cancel() {
-            clientTasks.remove(this)
-            serverTasks.remove(this)
+            synchronized(taskLock) {
+                clientTasks.remove(this)
+                serverTasks.remove(this)
+            }
         }
     }
 
@@ -31,21 +34,33 @@ object Scheduler {
     }
 
     private fun tick(tasks: MutableList<Task>, server: Boolean) {
-        for (i in tasks.size - 1 downTo 0) {
-            val task = tasks[i]
+        val due = mutableListOf<Task>()
+        synchronized(taskLock) {
+            for (i in tasks.size - 1 downTo 0) {
+                val task = tasks[i]
 
-            if (--task.delay > 0) continue
-
+                if (--task.delay > 0) continue
+                due.add(task)
+                if (task.repeat >= 0) task.delay = task.repeat
+                else tasks.removeAt(i)
+            }
+        }
+        due.forEach { task ->
             if (server) task.cb(task) else mc.submit { task.cb(task) }
-
-            if (task.repeat >= 0) task.delay = task.repeat
-            else tasks.removeAt(i)
         }
     }
 
     @JvmOverloads
     fun scheduleTask(delay: Int = 0, server: Boolean = false, cb: (Task) -> Unit) {
-        (if (server) serverTasks else clientTasks).add(Task(delay, cb = cb))
+        scheduleTaskHandle(delay, server, cb)
+    }
+
+    fun scheduleTaskHandle(delay: Int = 0, server: Boolean = false, cb: (Task) -> Unit): Task {
+        val task = Task(delay, cb = cb)
+        synchronized(taskLock) {
+            (if (server) serverTasks else clientTasks).add(task)
+        }
+        return task
     }
 
     @JvmOverloads
@@ -55,7 +70,9 @@ object Scheduler {
         cb: (Task) -> Unit
     ): Task {
         val task = Task(interval, interval, cb)
-        (if (server) serverTasks else clientTasks).add(Task(interval, interval, cb))
+        synchronized(taskLock) {
+            (if (server) serverTasks else clientTasks).add(task)
+        }
         return task
     }
 

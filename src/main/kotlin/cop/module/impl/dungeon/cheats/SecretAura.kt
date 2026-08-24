@@ -217,7 +217,7 @@ object SecretAura : Module(
             if (swing && !player.isShiftKeyDown) player.swing(InteractionHand.MAIN_HAND)
         }
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             when (packet) {
 //                is ClientboundBlockEventPacket -> { // hypixel doesn't seem to be sending these
 //                    if (packet.block == Blocks.CHEST) blocksDone.add(packet.pos.immutable())
@@ -297,9 +297,9 @@ object SecretAura : Module(
 
     private fun BlockPos.isBossBlock(state: BlockState): Boolean {
         if (state.block != Blocks.LEVER) return false
-        val p3Lever = this in levers && EntityUtils.getEntities<ArmorStand>(vec3.aabb(0.5)) { it.displayName?.string == "Not Activated" }.isNotEmpty()
+        val p3Lever = this in levers && EntityUtils.getEntities<ArmorStand>(vec3.aabb(0.5)) { it.displayName.string == "Not Activated" }.isNotEmpty()
         val devLever = this in deviceLevers && state.hasProperty(LeverBlock.POWERED) && !state.getValue(LeverBlock.POWERED)
-        val extraDevLever = this == extraDevLever && !devLever && EntityUtils.getEntities<ArmorStand>(vec3.aabb(2.0)) { it.displayName?.string == "Inactive" }.isNotEmpty() // untested
+        val extraDevLever = this == extraDevLever && !devLever && EntityUtils.getEntities<ArmorStand>(vec3.aabb(2.0)) { it.displayName.string == "Inactive" }.isNotEmpty() // untested
         return p3Lever || devLever || extraDevLever
     }
 

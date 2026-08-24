@@ -1,13 +1,12 @@
-# Screenshots
+# Repository-Bilder
 
-Hier landen die Bilder die im README referenziert werden.
-Aktuell erwartet (siehe Kommentare in `README.md`):
+`cop-hero.svg` ist ein code-natives, lokales Banner für die GitHub-Startseite. Es enthält keine externen Assets oder In-Game-Behauptungen und kann direkt im Browser skaliert werden.
 
-| Datei | Was rein? |
-|---|---|
-| `autocroesus-overlay.png` | AutoCroesus Profit-Overlay über einem Run-Sub-Screen. Sollte Cost / Value / Profit pro Chest zeigen, ★ auf dem besten Chest. |
-| `dungeon-subcategories.png` | ClickGUI mit aufgeklappter Dungeon-Spalte und den 5 Sub-Headers (Worldrender / Huds / Solvers / Qol / Cheats). |
+Optionale echte Screenshots können später ergänzt werden. Dafür gelten folgende Regeln:
 
-Sobald die Dateien existieren, in `README.md` die `<!-- … -->`-Kommentare durch die richtigen `![alt](docs/images/...)`-Tags ersetzen.
-
-**Format:** PNG, idealerweise 1280-1920 px Breite, unter ~500 KB pro Bild. Bei Screenshots aus dem Spiel vorher Mods deaktivieren die irrelevant fürs jeweilige Feature sind, damit das Bild fokussiert ist.
+- Nur tatsächlich getestete mc26-Funktionen zeigen.
+- Private Chat-, Account-, Server- und Party-Daten vor der Aufnahme ausblenden.
+- Einen klaren Fokus pro Bild wählen; irrelevante Overlays deaktivieren.
+- PNG oder WebP, idealerweise 1280–1920 px breit und komprimiert.
+- Aussagekräftigen Dateinamen und Alt-Text im README verwenden.
+- Keine Mockups so darstellen, als wären sie echte In-Game-Aufnahmen.

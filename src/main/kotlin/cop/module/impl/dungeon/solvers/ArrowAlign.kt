@@ -147,6 +147,9 @@ object ArrowAlign : Module(
                         )
                     )
 
+                    // 26.x merged INTERACT_AT and the old plain INTERACT
+                    // fallback into one location-bearing packet.
+                    //? if < 26 {
                     mc.connection?.send(
                         ServerboundInteractPacket.createInteractionPacket(
                             frame.entity,
@@ -154,6 +157,7 @@ object ArrowAlign : Module(
                             InteractionHand.MAIN_HAND
                         )
                     )
+                    //? }
                 }
                 break
             }

@@ -24,7 +24,7 @@ object SplitsManager {
     private var tickCounter: Long = 0L
 
     init {
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             if (currentSplits.isEmpty()) return@on
 
             val split = currentSplits.firstOrNull { it.time == 0L && it.regex.matches(message.noControlCodes) } ?: return@on

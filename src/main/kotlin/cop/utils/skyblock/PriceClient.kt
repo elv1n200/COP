@@ -3,13 +3,16 @@ package cop.utils.skyblock
 import com.google.gson.JsonParser
 import cop.CopMod
 import cop.CopMod.scope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -19,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Endpoints
  *  - Bazaar (instant-sell prices for bazaar items)
- *  - Moulberry lowestbin.json (lowest BIN per item id, covers non-bazaar items)
+ *  - SkyCofl per-item lowest BIN (covers non-bazaar items)
  *  - Hypixel items registry (display-name -> item id, for parsing GUI lore back
  *    into Skyblock IDs)
  *
@@ -39,35 +42,50 @@ object PriceClient {
      *  lowest BIN per unit = min(startingBid / count). */
     private const val URL_SKYCOFL_BIN_F = "https://sky.coflnet.com/api/auctions/tag/%s/active/bin"
 
-    /** Default cache lifetime for the bulk sources (Bazaar + items registry +
-     *  Moulberry's bulk LBIN). Auctions move faster than that — per-item LBIN
-     *  uses its own shorter TTL below. */
+    /** Default cache lifetime for the bulk sources (Bazaar + items registry).
+     *  Auctions move faster than that — per-item LBIN uses its own shorter TTL. */
     const val DEFAULT_REFRESH_MS: Long = 30L * 60 * 1000
     /** Per-item LBIN TTL — auctions can change in minutes, so we don't trust
      *  a cached value much longer than this. */
     private const val LBIN_TTL_MS: Long = 10L * 60 * 1000
+    private const val FAILURE_BACKOFF_MS: Long = 30L * 1000
+    private const val MAX_PENDING_LBIN_REQUESTS = 64
+    private val ITEM_ID_PATTERN = Regex("^[A-Za-z0-9_:-]{1,128}$")
 
-    private val bazaarSell = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-sell
-    private val bazaarBuy  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-buy (price sellers list at)
+    @Volatile private var bazaarSell = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-sell
+    @Volatile private var bazaarBuy  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> bazaar instant-buy (price sellers list at)
     private val lowestBin  = ConcurrentHashMap<String, Double>()  // ITEM_ID -> LBIN (from any source)
     private val lowestBinFetchedAt = ConcurrentHashMap<String, Long>()  // per-id fetch time for TTL
     private val lbinInFlight = ConcurrentHashMap.newKeySet<String>()    // dedupe concurrent SkyCofl fetches
-    private val nameToId   = ConcurrentHashMap<String, String>()  // lowercased display name -> ITEM_ID
+    private val lbinRetryAfter = ConcurrentHashMap<String, Long>()
+    private val lbinSemaphore = Semaphore(4)
+    private val lbinPendingSlots = Semaphore(MAX_PENDING_LBIN_REQUESTS)
+    @Volatile private var nameToId   = ConcurrentHashMap<String, String>()  // lowercased display name -> ITEM_ID
 
-    @Volatile private var lastRefreshedAt = 0L
+    @Volatile private var bazaarRefreshedAt = 0L
+    @Volatile private var itemRegistryRefreshedAt = 0L
+    @Volatile private var refreshRetryAfter = 0L
     @Volatile var lastError: String? = null; private set
-    private val refreshMutex = Mutex()
+    private val refreshLock = Any()
+    private var refreshInFlight = false
+    private val refreshCallbacks = mutableListOf<() -> Unit>()
 
-    val isLoaded: Boolean get() = lastRefreshedAt > 0L
-    val lastRefresh: Long get() = lastRefreshedAt
+    val isLoaded: Boolean get() = bazaarRefreshedAt > 0L && itemRegistryRefreshedAt > 0L
+    val lastRefresh: Long
+        get() = if (isLoaded) minOf(bazaarRefreshedAt, itemRegistryRefreshedAt) else 0L
     /** Milliseconds since the last successful refresh (`Long.MAX_VALUE` if never). */
-    val ageMs: Long get() = if (lastRefreshedAt == 0L) Long.MAX_VALUE else System.currentTimeMillis() - lastRefreshedAt
+    val ageMs: Long get() = ageOf(lastRefresh)
+    private val bazaarAgeMs: Long get() = ageOf(bazaarRefreshedAt)
+    private val itemRegistryAgeMs: Long get() = ageOf(itemRegistryRefreshedAt)
+
+    private fun ageOf(timestamp: Long): Long =
+        if (timestamp == 0L) Long.MAX_VALUE else (System.currentTimeMillis() - timestamp).coerceAtLeast(0L)
 
     /** Best of (bazaar instant-sell, lowest BIN) for a Skyblock item id, or null
      *  if neither source knows it. */
     fun getPrice(itemId: String): Double? {
-        val bz = bazaarSell[itemId]
-        val lb = lowestBin[itemId]
+        val bz = getBazaarSell(itemId)
+        val lb = getLowestBin(itemId)
         return when {
             bz != null && lb != null -> maxOf(bz, lb)
             bz != null -> bz
@@ -76,13 +94,19 @@ object PriceClient {
         }
     }
 
-    fun getBazaarSell(itemId: String): Double? = bazaarSell[itemId]
+    fun getBazaarSell(itemId: String): Double? =
+        bazaarSell[itemId].takeIf { bazaarAgeMs < DEFAULT_REFRESH_MS }
     /** Bazaar **buy** price — what a sell-order is listed at, i.e. the price
      *  someone has to pay to instant-buy. Useful as a fallback when [getBazaarSell]
      *  is 0 (no active buy orders): the item still has a real market value, you
      *  just have to be patient and post a sell order yourself near this number. */
-    fun getBazaarBuy(itemId: String): Double? = bazaarBuy[itemId]
-    fun getLowestBin(itemId: String): Double? = lowestBin[itemId]
+    fun getBazaarBuy(itemId: String): Double? =
+        bazaarBuy[itemId].takeIf { bazaarAgeMs < DEFAULT_REFRESH_MS }
+    fun getLowestBin(itemId: String): Double? {
+        val fetchedAt = lowestBinFetchedAt[itemId] ?: return null
+        if (System.currentTimeMillis() - fetchedAt >= LBIN_TTL_MS) return null
+        return lowestBin[itemId]
+    }
 
     /** "Hyperion" -> "HYPERION" (via the Hypixel items registry). Case- and
      *  whitespace-insensitive. Returns null if no exact match.
@@ -92,7 +116,7 @@ object PriceClient {
      *  reforges aren't in the registry — callers that need those must build the
      *  id themselves from the Skyblock enchantments NBT. */
     fun resolveItemId(displayName: String): String? =
-        nameToId[displayName.trim().lowercase()]
+        nameToId[displayName.trim().lowercase()].takeIf { itemRegistryAgeMs < DEFAULT_REFRESH_MS }
 
     /** Map a Galatea / Hunting-Box shard display name to its bazaar id.
      *  `"Power Dragon Shard"` -> `"SHARD_POWER_DRAGON"`. The items-registry
@@ -104,6 +128,7 @@ object PriceClient {
      *  if the bazaar actually lists it. Returns null otherwise so callers fall
      *  through to the next resolution strategy. */
     fun resolveShardId(displayName: String): String? {
+        if (bazaarAgeMs >= DEFAULT_REFRESH_MS) return null
         val trimmed = displayName.trim()
         val withoutSuffix = when {
             trimmed.endsWith(" Shards", ignoreCase = true) -> trimmed.dropLast(7).trim()
@@ -151,6 +176,7 @@ object PriceClient {
      *  for an ultimate enchant), we try the ultimate id as a fallback so
      *  `getEnchantBookPrice("combo", 5)` still works. */
     fun getEnchantBookPrice(enchantName: String, level: Int): Double? {
+        if (bazaarAgeMs >= DEFAULT_REFRESH_MS) return null
         val name = enchantName.uppercase()
         bazaarSell["ENCHANTMENT_${name}_$level"]?.let { return it }
         if (!name.startsWith("ULTIMATE_")) {
@@ -164,20 +190,29 @@ object PriceClient {
      *  SkyCofl fetch on a background coroutine. Designed to be called every
      *  frame by the overlay — cheap when cached, deduped when in flight. */
     fun ensureLowestBin(itemId: String) {
-        if (itemId.isBlank()) return
+        if (!ITEM_ID_PATTERN.matches(itemId)) return
+        val now = System.currentTimeMillis()
         val age = lowestBinFetchedAt[itemId] ?: 0L
-        if (System.currentTimeMillis() - age < LBIN_TTL_MS) return
+        if (now - age < LBIN_TTL_MS || (lbinRetryAfter[itemId] ?: 0L) > now) return
         if (!lbinInFlight.add(itemId)) return  // a fetch is already in flight
+        if (!lbinPendingSlots.tryAcquire()) {
+            lbinInFlight.remove(itemId)
+            return
+        }
         scope.launch(Dispatchers.IO) {
             try {
-                fetchSkyCoflLowestBin(itemId)?.let {
-                    lowestBin[itemId] = it
-                    lowestBinFetchedAt[itemId] = System.currentTimeMillis()
-                }
-            } catch (t: Throwable) {
-                CopMod.logger.warn("[cop] SkyCofl LBIN fetch failed for $itemId: ${t.message}")
+                val price = fetchSkyCoflLowestBin(itemId)
+                if (price == null) lowestBin.remove(itemId) else lowestBin[itemId] = price
+                lowestBinFetchedAt[itemId] = System.currentTimeMillis()
+                lbinRetryAfter.remove(itemId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lbinRetryAfter[itemId] = System.currentTimeMillis() + FAILURE_BACKOFF_MS
+                CopMod.logger.warn("[cop] SkyCofl LBIN fetch failed for $itemId: ${e.message}")
             } finally {
                 lbinInFlight.remove(itemId)
+                lbinPendingSlots.release()
             }
         }
     }
@@ -186,23 +221,36 @@ object PriceClient {
      *  if the cached value is still fresh, [onDone] fires immediately with it.
      *  Used by /copdev pricetest. */
     fun fetchLowestBin(itemId: String, force: Boolean = false, onDone: (Double?) -> Unit) {
+        if (!ITEM_ID_PATTERN.matches(itemId)) {
+            onDone(null)
+            return
+        }
         val cached = lowestBin[itemId]
-        val age = lowestBinFetchedAt[itemId] ?: 0L
-        if (!force && cached != null && System.currentTimeMillis() - age < LBIN_TTL_MS) {
-            onDone(cached); return
+        val now = System.currentTimeMillis()
+        val fetchedAt = lowestBinFetchedAt[itemId] ?: 0L
+        if (!force && now - fetchedAt < LBIN_TTL_MS) {
+            onDone(cached)
+            return
+        }
+        if (!force && (lbinRetryAfter[itemId] ?: 0L) > now) {
+            onDone(null)
+            return
         }
         scope.launch(Dispatchers.IO) {
-            val price = try {
-                fetchSkyCoflLowestBin(itemId)
-            } catch (t: Throwable) {
-                CopMod.logger.warn("[cop] SkyCofl LBIN fetch failed for $itemId: ${t.message}")
-                null
-            }
-            if (price != null) {
-                lowestBin[itemId] = price
+            val result = try {
+                val price = fetchSkyCoflLowestBin(itemId)
+                if (price == null) lowestBin.remove(itemId) else lowestBin[itemId] = price
                 lowestBinFetchedAt[itemId] = System.currentTimeMillis()
+                lbinRetryAfter.remove(itemId)
+                price
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lbinRetryAfter[itemId] = System.currentTimeMillis() + FAILURE_BACKOFF_MS
+                CopMod.logger.warn("[cop] SkyCofl LBIN fetch failed for $itemId: ${e.message}")
+                cached
             }
-            onDone(price ?: cached)
+            onDone(result)
         }
     }
 
@@ -211,23 +259,71 @@ object PriceClient {
      *  cache is still fresh). Callback runs on Dispatchers.IO — schedule UI/chat
      *  work via `mc.execute { ... }` if you need to touch the main thread. */
     fun refreshIfStale(maxAgeMs: Long = DEFAULT_REFRESH_MS, onDone: (() -> Unit)? = null) {
-        if (ageMs < maxAgeMs) { onDone?.invoke(); return }
+        var completeImmediately = false
+        val shouldStart = synchronized(refreshLock) {
+            if (ageMs < maxAgeMs || System.currentTimeMillis() < refreshRetryAfter) {
+                completeImmediately = true
+                false
+            } else {
+                onDone?.let(refreshCallbacks::add)
+                if (refreshInFlight) {
+                    false
+                } else {
+                    refreshInFlight = true
+                    true
+                }
+            }
+        }
+        if (completeImmediately) {
+            onDone?.invoke()
+            return
+        }
+        if (!shouldStart) return
+
         scope.launch(Dispatchers.IO) {
-            refreshMutex.withLock {
-                if (ageMs < maxAgeMs) return@withLock  // someone else refreshed while we waited
+            try {
+                if (ageMs < maxAgeMs) return@launch
                 // Bulk sources: bazaar prices + the items registry (display-name
                 // -> id). LBIN is handled per-item via SkyCofl on demand; there
                 // is no bulk LBIN source any more. Each fetch is isolated so a
                 // single slow/failing endpoint doesn't blow away the other.
                 val errors = mutableListOf<String>()
-                runCatching { fetchBazaar() }      .onFailure { errors += "bazaar: ${it.message ?: it.javaClass.simpleName}" }
-                runCatching { fetchItemRegistry() }.onFailure { errors += "items: ${it.message ?: it.javaClass.simpleName}" }
-                val anySucceeded = bazaarSell.isNotEmpty() || nameToId.isNotEmpty()
-                if (anySucceeded) lastRefreshedAt = System.currentTimeMillis()
+                if (bazaarAgeMs >= maxAgeMs) {
+                    try {
+                        fetchBazaar()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        errors += "bazaar: ${e.message ?: e.javaClass.simpleName}"
+                    }
+                }
+                if (itemRegistryAgeMs >= maxAgeMs) {
+                    try {
+                        fetchItemRegistry()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        errors += "items: ${e.message ?: e.javaClass.simpleName}"
+                    }
+                }
+
+                refreshRetryAfter = if (errors.isEmpty()) 0L
+                    else System.currentTimeMillis() + FAILURE_BACKOFF_MS
                 lastError = if (errors.isEmpty()) null else errors.joinToString("; ")
                 if (errors.isNotEmpty()) CopMod.logger.warn("[cop] PriceClient partial: $lastError")
+            } finally {
+                val callbacks = synchronized(refreshLock) {
+                    refreshInFlight = false
+                    refreshCallbacks.toList().also { refreshCallbacks.clear() }
+                }
+                for (callback in callbacks) {
+                    try {
+                        callback()
+                    } catch (e: Exception) {
+                        CopMod.logger.warn("[cop] PriceClient callback failed", e)
+                    }
+                }
             }
-            onDone?.invoke()
         }
     }
 
@@ -238,6 +334,7 @@ object PriceClient {
     private fun openJsonGet(url: String): HttpURLConnection {
         val conn = URI(url).toURL().openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
+        conn.doOutput = false
         conn.connectTimeout = 10_000
         conn.readTimeout = 20_000
         conn.setRequestProperty("Accept", "application/json")
@@ -247,61 +344,83 @@ object PriceClient {
 
     private fun fetchBazaar() {
         val conn = openJsonGet(URL_BAZAAR)
-        conn.inputStream.use { stream ->
-            val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
-            check(root.get("success")?.asBoolean == true) { "success=false" }
-            val products = root.getAsJsonObject("products") ?: return
-            bazaarSell.clear()
-            bazaarBuy.clear()
-            for ((id, json) in products.entrySet()) {
-                val qs = json.asJsonObject.getAsJsonObject("quick_status") ?: continue
-                // Store BOTH prices even when 0 — for getBazaarSell the
-                // presence-in-map (vs absent) means "is on bazaar at all"
-                // and 0 means "on bazaar, but no buyers right now". That
-                // distinction matters because chest profit should NOT pretend
-                // a book is worth its listed buyPrice (you'd have to wait days
-                // for that, and the price can move) — sellPrice is what you'd
-                // actually get if you converted the item to coins now.
-                qs.get("sellPrice")?.asDouble?.let { bazaarSell[id] = it }
-                qs.get("buyPrice")?.asDouble?.let { bazaarBuy[id] = it }
+        try {
+            conn.inputStream.use { stream ->
+                val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
+                check(root.get("success")?.asBoolean == true) { "success=false" }
+                val products = root.getAsJsonObject("products") ?: error("products missing")
+                val newSell = HashMap<String, Double>()
+                val newBuy = HashMap<String, Double>()
+                for ((id, json) in products.entrySet()) {
+                    val qs = json.asJsonObject.getAsJsonObject("quick_status") ?: continue
+                    // Store BOTH prices even when 0 — for getBazaarSell the
+                    // presence-in-map (vs absent) means "is on bazaar at all"
+                    // and 0 means "on bazaar, but no buyers right now". That
+                    // distinction matters because chest profit should NOT pretend
+                    // a book is worth its listed buyPrice (you'd have to wait days
+                    // for that, and the price can move) — sellPrice is what you'd
+                    // actually get if you converted the item to coins now.
+                    qs.get("sellPrice")?.asDouble?.takeIf { it.isFinite() && it >= 0.0 }
+                        ?.let { newSell[id] = it }
+                    qs.get("buyPrice")?.asDouble?.takeIf { it.isFinite() && it >= 0.0 }
+                        ?.let { newBuy[id] = it }
+                }
+                check(newSell.isNotEmpty() && newBuy.isNotEmpty()) { "empty price response" }
+                bazaarSell = ConcurrentHashMap(newSell)
+                bazaarBuy = ConcurrentHashMap(newBuy)
+                bazaarRefreshedAt = System.currentTimeMillis()
             }
+        } finally {
+            conn.disconnect()
         }
     }
 
     /** Per-item SkyCofl BIN lookup. Returns the lowest BIN per unit, or null
      *  if the item has no active BIN auctions (or the request failed). */
-    private fun fetchSkyCoflLowestBin(itemId: String): Double? {
-        val url = URL_SKYCOFL_BIN_F.format(itemId)
-        val conn = openJsonGet(url)
-        conn.inputStream.use { stream ->
-            val root = JsonParser.parseReader(InputStreamReader(stream))
-            if (!root.isJsonArray) return null
-            var minPerItem = Double.MAX_VALUE
-            for (el in root.asJsonArray) {
-                val obj = el.asJsonObject
-                val count = obj.get("count")?.asInt ?: 1
-                val bid = obj.get("startingBid")?.asDouble ?: continue
-                if (count <= 0 || bid <= 0) continue
-                val perItem = bid / count
-                if (perItem < minPerItem) minPerItem = perItem
+    private suspend fun fetchSkyCoflLowestBin(itemId: String): Double? = lbinSemaphore.withPermit {
+        check(ITEM_ID_PATTERN.matches(itemId)) { "invalid item id" }
+        val encodedId = URLEncoder.encode(itemId, StandardCharsets.UTF_8).replace("+", "%20")
+        val conn = openJsonGet(URL_SKYCOFL_BIN_F.format(encodedId))
+        try {
+            conn.inputStream.use { stream ->
+                val root = JsonParser.parseReader(InputStreamReader(stream))
+                check(root.isJsonArray) { "expected JSON array" }
+                var minPerItem = Double.MAX_VALUE
+                for (el in root.asJsonArray) {
+                    val obj = el.asJsonObject
+                    val count = obj.get("count")?.asInt ?: 1
+                    val bid = obj.get("startingBid")?.asDouble ?: continue
+                    if (count <= 0 || !bid.isFinite() || bid <= 0) continue
+                    val perItem = bid / count
+                    if (perItem.isFinite() && perItem < minPerItem) minPerItem = perItem
+                }
+                if (minPerItem != Double.MAX_VALUE) minPerItem else null
             }
-            return if (minPerItem != Double.MAX_VALUE) minPerItem else null
+        } finally {
+            conn.disconnect()
         }
     }
 
     private fun fetchItemRegistry() {
         val conn = openJsonGet(URL_ITEMS)
-        conn.inputStream.use { stream ->
-            val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
-            check(root.get("success")?.asBoolean == true) { "success=false" }
-            val items = root.getAsJsonArray("items") ?: return
-            nameToId.clear()
-            for (el in items) {
-                val obj = el.asJsonObject
-                val id = obj.get("id")?.asString ?: continue
-                val name = obj.get("name")?.asString ?: continue
-                nameToId[name.trim().lowercase()] = id
+        try {
+            conn.inputStream.use { stream ->
+                val root = JsonParser.parseReader(InputStreamReader(stream)).asJsonObject
+                check(root.get("success")?.asBoolean == true) { "success=false" }
+                val items = root.getAsJsonArray("items") ?: error("items missing")
+                val newNameToId = HashMap<String, String>()
+                for (el in items) {
+                    val obj = el.asJsonObject
+                    val id = obj.get("id")?.asString ?: continue
+                    val name = obj.get("name")?.asString ?: continue
+                    if (ITEM_ID_PATTERN.matches(id)) newNameToId[name.trim().lowercase()] = id
+                }
+                check(newNameToId.isNotEmpty()) { "empty item registry" }
+                nameToId = ConcurrentHashMap(newNameToId)
+                itemRegistryRefreshedAt = System.currentTimeMillis()
             }
+        } finally {
+            conn.disconnect()
         }
     }
 }

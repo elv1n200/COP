@@ -7,6 +7,7 @@ import net.minecraft.world.effect.MobEffects
 import net.minecraft.world.level.ClipContext
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.phys.HitResult
+import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.Vec3
 import cop.api.colour.Colour
 import cop.api.colour.withAlpha
@@ -54,13 +55,23 @@ object DungeonBreaker : Module(
 
     private val zeroPingDungeonBreaker by switch("Zero ping", desc = "Insta-mine blocks.")
     private val onlyWhenFatigue by switch("Fatigue only", desc = "Only insta-mine blocks when mining fatigue is applied.").childOf(::zeroPingDungeonBreaker)
+    private val disableInInventory by switch("Disable in inventory", true, desc = "Pauses breaker automation while a screen is open.")
+
+    private val triggerBot by switch("Look triggerbot", desc = "Mines a saved breaker block after you look at it.")
+    private val triggerBotDelay by slider("Trigger delay", 0, 0, 10, 1, unit = "t").childOf(::triggerBot)
 
     private val autoDb by switch("Auto dungeon breaker", desc = "Automatically mines preset route when in boss. /db help")
+    private val autoDbRange by slider("Auto range", 5.5, 1.0, 5.5, 0.1, unit = " blocks").childOf(::autoDb)
+    private val autoDbFov by slider("Auto FOV", 360, 10, 360, 5, unit = "°").childOf(::autoDb)
+    private val autoDbDelay by slider("Auto delay", 0, 0, 20, 1, unit = "t").childOf(::autoDb)
     private val zeroTickDb by switch("Zero tick").childOf(::autoDb)
     private val dbBlocks by configList<BlockPos>("dungeonbreaker_blocks.json")
 
     private var editMode = false
     private var lastClickedBlock: BlockPos? = null
+    private var triggerTarget: BlockPos? = null
+    private var triggerTicks = 0
+    private var autoDbTicks = 0
     private val recentlyBroken = mutableMapOf<BlockPos, Long>()
     private val db = command.sub("db").requires("&cDungeon Breaker module is disabled!") { enabled }
 
@@ -78,6 +89,7 @@ object DungeonBreaker : Module(
         on<PacketEvent.Sent, ServerboundPlayerActionPacket> {
             if (!zeroPingDungeonBreaker) return@on
             if (editMode) return@on
+            if (disableInInventory && mc.screen != null) return@on
             if (onlyWhenFatigue && !player.hasEffect(MobEffects.MINING_FATIGUE)) return@on
             if (packet.action != ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK) return@on
 
@@ -140,14 +152,20 @@ object DungeonBreaker : Module(
 
         on<TickEvent.Start> {
             lastClickedBlock = null
-            if (!autoDb || editMode || !inBoss || floor?.floorNumber != 7) return@on
+            if ((!autoDb && !triggerBot) || editMode || !inBoss || floor?.floorNumber != 7) return@on
+            if (disableInInventory && mc.screen != null) return@on
             if (dbBlocks.isEmpty()) return@on
+
+            if (triggerBot) tickTriggerBot()
+            if (!autoDb) return@on
+            if (autoDbTicks++ < autoDbDelay) return@on
 
             val blocks = dbBlocks.filter { pos ->
                 !recentlyBroken.containsKey(pos) &&
                 level.isLoaded(pos) &&
                 !pos.state.isAir &&
-                pos.distToCenterSqr(player.eyePosition()) <= 30.0
+                pos.distToCenterSqr(player.eyePosition()) <= autoDbRange * autoDbRange &&
+                isInsideFov(pos, autoDbFov)
             }
             if (blocks.isEmpty()) return@on
 
@@ -165,6 +183,7 @@ object DungeonBreaker : Module(
                 if (i >= initialCharges) return@on
                 AuraManager.breakBlock(pos, immediate = true)
                 recentlyBroken[pos] = System.currentTimeMillis()
+                autoDbTicks = 0
                 if (!zeroTickDb) return@on
             }
         }
@@ -178,12 +197,53 @@ object DungeonBreaker : Module(
         }
 
         scheduleLoop(10) {
-            if (enabled && autoDb) clearCooldownCache()
+            if (enabled) clearCooldownCache()
         }
     }
 
     private fun clearCooldownCache() {
         val now = System.currentTimeMillis()
         recentlyBroken.entries.removeIf { (pos, time) -> now - time > 10_500 || !pos.state.isAir }
+    }
+
+    private fun tickTriggerBot() {
+        val hit = mc.hitResult as? BlockHitResult
+        val pos = hit?.takeIf { it.type == HitResult.Type.BLOCK }?.blockPos
+            ?.takeIf { it in dbBlocks && isMineable(it, 5.5) }
+
+        if (pos == null) {
+            triggerTarget = null
+            triggerTicks = 0
+            return
+        }
+
+        if (triggerTarget != pos) {
+            triggerTarget = pos
+            triggerTicks = 0
+        }
+        if (triggerTicks++ < triggerBotDelay) return
+
+        val breakerSlot = PlayerUtils.breakerSlot ?: return
+        if (player.inventory.selectedSlot != breakerSlot) {
+            SwapManager.swapToSlot(breakerSlot)
+            return
+        }
+        if (getBreakerCharges(player.inventory.getItem(breakerSlot)) <= 0) return
+
+        AuraManager.breakBlock(pos, immediate = true)
+        recentlyBroken[pos] = System.currentTimeMillis()
+        triggerTarget = null
+        triggerTicks = 0
+    }
+
+    private fun isMineable(pos: BlockPos, range: Double): Boolean =
+        !recentlyBroken.containsKey(pos) && level.isLoaded(pos) && !pos.state.isAir &&
+            pos.distToCenterSqr(player.eyePosition()) <= range * range
+
+    private fun isInsideFov(pos: BlockPos, fov: Int): Boolean {
+        if (fov >= 360) return true
+        val direction = Vec3.atCenterOf(pos).subtract(player.eyePosition()).normalize()
+        val threshold = kotlin.math.cos(Math.toRadians(fov / 2.0))
+        return player.lookAngle.normalize().dot(direction) >= threshold
     }
 }

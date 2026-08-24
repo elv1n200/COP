@@ -9,7 +9,10 @@ import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonWriter
 import cop.utils.ChatUtils
 import cop.utils.ChatUtils.modMessage
+import cop.CopMod.logger
+import cop.CopMod.mc
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.properties.ReadOnlyProperty
@@ -17,7 +20,32 @@ import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.findAnnotation
 
 // https://github.com/Noamm9/CatgirlAddons/blob/main/src/main/kotlin/catgirlroutes/utils/ConfigSystem.kt
-val configPath = File("config/cop")
+val configPath: File by lazy {
+    val target = File(mc.gameDirectory, "config/cop").absoluteFile
+    val legacy = File("config/cop").absoluteFile
+    val migrationMarker = File(target, ".legacy-cwd-migration-v1")
+    target.mkdirs()
+
+    // Older builds resolved this path against the launcher's working directory.
+    // Copy missing legacy files into the canonical game directory once, without
+    // overwriting newer data or deleting the recoverable legacy copy.
+    if (!migrationMarker.exists()) {
+        val migration = runCatching {
+            if (legacy.toPath().normalize() != target.toPath().normalize() && legacy.isDirectory) {
+                legacy.walkTopDown().forEach { source ->
+                    val destination = File(target, source.relativeTo(legacy).path)
+                    if (source.isDirectory) destination.mkdirs()
+                    else if (!destination.exists()) source.copyTo(destination)
+                }
+            }
+        }
+        migration.onSuccess {
+            runCatching { migrationMarker.createNewFile() }
+                .onFailure { logger.warn("Failed to mark legacy COP config migration complete", it) }
+        }.onFailure { logger.warn("Failed to migrate legacy COP config directory", it) }
+    }
+    target
+}
 object ConfigSystem {
     val gson: Gson = GsonBuilder()
         .registerTypeAdapterFactory(typeAdapter<TriggerAction>())
@@ -34,20 +62,28 @@ object ConfigSystem {
         }
         return try {
             file.reader().use { gson.fromJson(it, object : TypeToken<T>() {}.type) } ?: default()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            ConfigRecovery.backup(file)
+            logger.warn("Failed to load config file '${file.name}'; using defaults", e)
             default()
         }
     }
 
     fun save(file: File, data: Any) = runCatching {
-        val tmpFile = File(file.parent, "${file.name}.tmp") // should prevent corruption on err
-        tmpFile.writer().use { gson.toJson(data, it) }
-        Files.move(
-            tmpFile.toPath(),
-            file.toPath(),
-            StandardCopyOption.REPLACE_EXISTING,
-            StandardCopyOption.ATOMIC_MOVE
-        )
+        val target = file.toPath()
+        val parent = target.parent
+        Files.createDirectories(parent)
+        val temp = Files.createTempFile(parent, "${file.name}.", ".tmp")
+        try {
+            Files.newBufferedWriter(temp).use { gson.toJson(data, it) }
+            try {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(temp)
+        }
     }.onFailure {
         modMessage(
             ChatUtils.button(

@@ -1,11 +1,11 @@
 package cop.module
 
-enum class Category {
-    DUNGEON,
-    RENDER,
-    PLAYER,
-    MISC,
-    MINING,
+enum class Category(val displayName: String) {
+    DUNGEON("Dungeons"),
+    RENDER("Render & Visuals"),
+    PLAYER("Player"),
+    MISC("SkyBlock & Misc"),
+    MINING("Mining"),
 
     /** Catch-all column for modules registered by third-party addons (see
      *  [cop.api.addon.CopAddon]). Addon modules default here unless they set a
@@ -13,5 +13,5 @@ enum class Category {
      *  — the ClickGUI positions category columns by ordinal and persists their
      *  positions keyed by this enum, so inserting in the middle would shuffle
      *  everyone's saved layout. */
-    ADDON,
+    ADDON("Add-ons"),
 }

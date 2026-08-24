@@ -6,7 +6,7 @@ import cop.module.impl.dungeon.worldrender.DungeonMap
 import cop.utils.Vec2i
 import cop.utils.equalsOneOf
 
-data class OdonDoor(val pos: Vec2i, var type: DoorType) {
+class OdonDoor(val pos: Vec2i, var type: DoorType) {
 
     var state: RoomState = RoomState.UNDISCOVERED
     var locked = type.equalsOneOf(DoorType.WITHER, DoorType.BLOOD)
@@ -61,4 +61,9 @@ data class OdonDoor(val pos: Vec2i, var type: DoorType) {
 
         locked = state == RoomState.UNOPENED && (type == DoorType.WITHER || type == DoorType.BLOOD)
     }
+
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is OdonDoor && pos == other.pos)
+
+    override fun hashCode(): Int = pos.hashCode()
 }

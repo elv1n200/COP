@@ -43,7 +43,7 @@ object TerminalAura : Module(
             val entities = EntityUtils.getEntities<ArmorStand>(player.boundingBox.inflate(auraDistance))
 
             for (entity in entities) {
-                val name = entity.displayName?.string ?: continue
+                val name = entity.displayName.string
 
                 if (!name.contains("Inactive Terminal")) continue
                 if (entity.isRemoved || !entity.isAlive) continue
@@ -64,7 +64,7 @@ object TerminalAura : Module(
                     entity,
                     player.isShiftKeyDown,
                     InteractionHand.MAIN_HAND,
-                    hitVec
+                    hitVec.subtract(entity.position())
                 )
 
                 mc.connection?.send(packet)

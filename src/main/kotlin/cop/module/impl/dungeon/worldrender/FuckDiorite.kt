@@ -90,7 +90,7 @@ object FuckDiorite : Module(
     private fun replaceDiorite() {
         for ((index, coordinateSet) in coordinates.withIndex()) {
             for (pos in coordinateSet) {
-                val state = level.getBlockState(pos) ?: return
+                val state = level.getBlockState(pos)
 
                 if (state.block.equalsOneOf(Blocks.DIORITE, Blocks.POLISHED_DIORITE)) {
                     setGlass(pos, index)

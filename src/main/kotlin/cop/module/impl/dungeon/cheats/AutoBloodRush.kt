@@ -97,7 +97,7 @@ object AutoBloodRush : Module( // todo clean up some day (probably never)
             }
         }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             if (debug) return@on
             if (currentRoom?.name != "Entrance") return@on
             if (bloodCoords == null) return@on
@@ -105,7 +105,7 @@ object AutoBloodRush : Module( // todo clean up some day (probably never)
                 runStarted = true
         }
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             if (goingMid && packet is ClientboundPlayerPositionPacket) {
                 if (packet.change.position.y in 75.0..77.0) {
                     goingMid = false

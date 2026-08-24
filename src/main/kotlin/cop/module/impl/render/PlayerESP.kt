@@ -40,7 +40,7 @@ object PlayerESP : Module(
     init {
         on<RenderEvent.World> {
             playerEntitiesNoSelf.forEach { entity ->
-                if (ironmenOnly && entity.displayName?.string?.contains("♲") == false) return@forEach
+                if (ironmenOnly && !entity.displayName.string.contains("♲")) return@forEach
                 val aabb = entity.interpolatedBox.inflate(sizeOffset, 0.0, sizeOffset)
                 val c = if (customCol) colour else entity.colourFromDistance
                 val fc = if (fillCustomCol) fillColour else entity.colourFromDistance.withAlpha(fillColour.alpha)
@@ -57,7 +57,7 @@ object PlayerESP : Module(
 
         on<EntityEvent.ForceGlow> {
             if (style.selected != "Glow") return@on
-            if (ironmenOnly && entity.displayName?.string?.contains("♲") == false) return@on
+            if (ironmenOnly && !entity.displayName.string.contains("♲")) return@on
             if (entity !in playerEntitiesNoSelf) return@on
             glowColour = colour
         }

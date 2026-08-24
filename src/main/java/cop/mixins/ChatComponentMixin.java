@@ -54,6 +54,10 @@ public abstract class ChatComponentMixin implements IChatComponent {
 
     @Unique
     private int nextId;
+    @Unique
+    private int preReplayId;
+    @Unique
+    private boolean suppressNextReplayReceive;
 
     @Override
     public void cop$add(Component message, int id) {
@@ -63,15 +67,51 @@ public abstract class ChatComponentMixin implements IChatComponent {
             allMessages.removeIf(msg -> ((IGuiMessage) (Object) msg).cop$getId() == id);
         }
 
+        int previousId = nextId;
         nextId = id;
-        //? if >= 26 {
-        /*addClientSystemMessage(message);*/
-        //? } else {
-        addMessage(message);
-        //? }
-        nextId = 0;
+        try {
+            //? if >= 26 {
+            /*addClientSystemMessage(message);*/
+            //? } else {
+            addMessage(message);
+            //? }
+        } finally {
+            nextId = previousId;
+        }
     }
 
+    @Override
+    public void cop$beginSearchReplay(int id) {
+        preReplayId = nextId;
+        nextId = id;
+        suppressNextReplayReceive = true;
+    }
+
+    @Override
+    public void cop$endSearchReplay() {
+        suppressNextReplayReceive = false;
+        nextId = preReplayId;
+    }
+
+    // 26.x uses Java 21's List.addFirst(Object); older versions insert at
+    // index 0 through List.add(int, Object). Keep the injector descriptor and
+    // argument index aligned with the actual bytecode in each version.
+    //? if >= 26 {
+    /*@ModifyArg(
+            method = "addMessageToDisplayQueue",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Ljava/util/List;addFirst(Ljava/lang/Object;)V"
+            ),
+            index = 0
+    )
+    private Object onAddVisibleLine(Object line) {
+        if (nextId != 0) {
+            ((IGuiMessage) line).cop$setId(nextId);
+        }
+        return line;
+    }*/
+    //? } else {
     @ModifyArg(
             method = "addMessageToDisplayQueue",
             at = @At(
@@ -86,6 +126,7 @@ public abstract class ChatComponentMixin implements IChatComponent {
         }
         return line;
     }
+    //? }
 
     @Inject(
             method = "addMessageToQueue(Lnet/minecraft/client/GuiMessage;)V",
@@ -109,7 +150,20 @@ public abstract class ChatComponentMixin implements IChatComponent {
             cancellable = true
     )
     private void onAddMessage(Component message, MessageSignature signatureData, GuiMessageSource source, GuiMessageTag indicator, CallbackInfo ci) {
-        if (new ChatEvent.Receive(message.getString(), message, nextId).post()) ci.cancel();
+        if (suppressNextReplayReceive) {
+            suppressNextReplayReceive = false;
+            return;
+        }
+        if (new ChatEvent.Receive(message.getString(), message, nextId).post()) {
+            ci.cancel();
+            return;
+        }
+
+        Screen currentScreen = Minecraft.getInstance().screen;
+        if (currentScreen instanceof ISearchMode searchScreen && searchScreen.cop$isSearchActive()) {
+            searchScreen.cop$queueMessage(message, signatureData, source, indicator, nextId);
+            ci.cancel();
+        }
     }
 
     @Inject(
@@ -141,20 +195,6 @@ public abstract class ChatComponentMixin implements IChatComponent {
     //? }
 
     //? if >= 26 {
-    /*@Inject(
-            method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",
-            at = @At("HEAD"),
-            cancellable = true
-    )
-    private void interceptMessage(Component message, MessageSignature signatureData, GuiMessageSource source, GuiMessageTag indicator, CallbackInfo ci) {
-        Screen currentScreen = Minecraft.getInstance().screen;
-        if (currentScreen instanceof ISearchMode searchScreen) {
-            if (searchScreen.cop$isSearchActive()) {
-                searchScreen.cop$queueMessage(message);
-                ci.cancel();
-            }
-        }
-    }*/
     //? } else {
     @Inject(
             method = "addMessage(Lnet/minecraft/network/chat/Component;)V",
@@ -162,15 +202,49 @@ public abstract class ChatComponentMixin implements IChatComponent {
             cancellable = true
     )
     private void interceptMessage(Component message, CallbackInfo ci) {
+        if (suppressNextReplayReceive) return;
         Screen currentScreen = Minecraft.getInstance().screen;
         if (currentScreen instanceof ISearchMode searchScreen) {
             if (searchScreen.cop$isSearchActive()) {
-                searchScreen.cop$queueMessage(message);
+                searchScreen.cop$queueMessage(message, nextId);
                 ci.cancel();
             }
         }
     }
     //? }
+
+    @Inject(
+            method = "deleteMessage(Lnet/minecraft/network/chat/MessageSignature;)V",
+            at = @At("HEAD"),
+            cancellable = true
+    )
+    private void interceptDeleteMessage(MessageSignature signatureData, CallbackInfo ci) {
+        Screen currentScreen = Minecraft.getInstance().screen;
+        if (currentScreen instanceof ISearchMode searchScreen && searchScreen.cop$isSearchActive()) {
+            searchScreen.cop$queueDeletion(signatureData);
+            ci.cancel();
+        }
+    }
+
+    // In 26.1.2 tick() calls this private queue processor, whose removeIf
+    // predicate invokes deleteMessageOrDelay(signature). Running it against
+    // the search projection can remove the vanilla delayed-deletion entry
+    // without updating the canonical backup. Pausing the processor preserves
+    // that exact entry and its deletableAfter timestamp for the first tick
+    // after search closes; no second COP deletion is queued or replayed.
+    //? if >= 26 {
+    /*@Inject(
+            method = "processMessageDeletionQueue()V",
+            at = @At("HEAD"),
+            cancellable = true
+    )
+    private void pauseDelayedMessageDeletionsDuringSearch(CallbackInfo ci) {
+        Screen currentScreen = Minecraft.getInstance().screen;
+        if (currentScreen instanceof ISearchMode searchScreen && searchScreen.cop$isSearchActive()) {
+            ci.cancel();
+        }
+    }
+    *///? }
 
     // 1.21.11 added a second boolean param to `render`, so the implicit
     // discriminator can no longer pick "the boolean" — pin to ordinal = 0

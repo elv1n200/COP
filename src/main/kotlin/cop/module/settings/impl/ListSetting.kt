@@ -17,7 +17,13 @@ class ListSetting<E, T : MutableCollection<E>>(
     private val type: Type
 ) : Setting<T>(name, ""), Saving {
 
-    override var value: T = default
+    private fun copyDefault(): T = gson.fromJson(gson.toJsonTree(default), type)
+
+    override var value: T = copyDefault()
+
+    override fun reset() {
+        value = copyDefault()
+    }
 
     override fun write(): JsonElement = gson.toJsonTree(value)
 

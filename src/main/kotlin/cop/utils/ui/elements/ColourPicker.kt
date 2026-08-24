@@ -33,6 +33,10 @@ import java.awt.Color.HSBtoRGB
 import kotlin.math.round
 import kotlin.reflect.KMutableProperty0
 
+private val checkerPointerImage by lazy { "checker-24.svg".image() }
+private val hueScaleImage by lazy { "HueScale.png".image() }
+private val checkerBarImage by lazy { "checker-225.svg".image() }
+
 fun ElementScope<*>.colourPicker(
     ref: KMutableProperty0<Colour.HSB>,
     allowAlpha: Boolean,
@@ -64,6 +68,7 @@ fun ElementScope<*>.colourPicker(
         var animate = false
 
         val colour = colour { value.rgb }
+        val checkerImage = if (allowAlpha) checkerPointerImage else null
         val constraints = constrain(
             x = pointerX.alignCentre,
             y = pointerY?.alignCentre ?: Centre,
@@ -77,7 +82,7 @@ fun ElementScope<*>.colourPicker(
                 val centerY = round(y + r - 3f)
                 NVGRenderer.dropShadow(x - 1, y - 1, size + 2, size + 2, blur = 4f, spread = 3f, radius = 10f)
                 NVGRenderer.circle(centerX, centerY, r, Colour.WHITE.rgb)
-                if (allowAlpha) image("checker-24.svg".image(), x + 1, y + 1, size - 2, size - 2, 10.radius())
+                checkerImage?.let { image(it, x + 1, y + 1, size - 2, size - 2, 10.radius()) }
                 NVGRenderer.circle(centerX, centerY, r - 4f, this.colour!!.rgb)
             }
         }.add()
@@ -182,7 +187,7 @@ fun ElementScope<*>.colourPicker(
                     val w = width - (padding.pixels * 2 + 18 + 22.5f)
                     column(constrain(y = Centre, w = w.px), gap = 12.px) {
                         image(
-                            image = "HueScale.png".image(),
+                            image = hueScaleImage,
                             constraints = size(w.px, 18.px),
                             radius = 8.radius()
                         ) {
@@ -199,7 +204,7 @@ fun ElementScope<*>.colourPicker(
                         }
 
                         if (allowAlpha) image(
-                            "checker-225.svg".image(),
+                            checkerBarImage,
                             constraints = size(w.px, 18.px),
                             radius = 8.radius()
                         ) {

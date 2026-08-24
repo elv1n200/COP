@@ -8,10 +8,12 @@ import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.Style
 import cop.api.events.ChatEvent
 import cop.api.events.GuiEvent
+import cop.api.events.WorldEvent
 import cop.api.events.core.Priority
 import cop.api.input.CatKeyboard
 import cop.api.input.CatKeyboard.Modifier.isShiftDown
 import cop.api.input.CatKeys
+import cop.api.skyblock.Location
 import cop.mixins.accessors.ChatComponentAccessor
 import cop.module.Module
 import cop.module.settings.UIComponent.Companion.childOf
@@ -29,6 +31,9 @@ object Chat : Module(
     "Chat",
     desc = "Various chat related tweaks."
 ) {
+    private val npcDialogueCommand = Regex(
+        "^/selectnpcoption [A-Za-z0-9_.:-]{1,128} [A-Za-z0-9_.:-]{1,128}$",
+    )
 
     private val chatBypass by switch("Chat bypass", desc = "Bypasses chat filters on servers.")
     private val bypassMode by selector("Mode", "Wide", arrayListOf("Wide", "Cyrillic"), desc = "Bypass mode.").childOf(::chatBypass)
@@ -78,9 +83,12 @@ object Chat : Module(
         }
 
         on<ChatEvent.Receive> (Priority.LOWEST) {
-            if (autoDialogue) message.noControlCodes.takeIf { it.startsWith("Select an option: ") && "[BARBARIANS] [MAGES]" !in it }?.let {
-                (text.siblings.getOrNull(0)?.style?.clickEvent as? ClickEvent.RunCommand)?.command?.let { ChatUtils.command(it) }
-            }
+            if (autoDialogue && Location.onHypixel && Location.inSkyblock) message.noControlCodes
+                .takeIf { it.startsWith("Select an option: ") && "[BARBARIANS] [MAGES]" !in it }
+                ?.let {
+                    val command = (text.siblings.getOrNull(0)?.style?.clickEvent as? ClickEvent.RunCommand)?.command
+                    if (command != null && npcDialogueCommand.matches(command)) ChatUtils.command(command)
+                }
 
             if (!compactChat || id != 0) return@on // don't compact messages with ids
 
@@ -89,26 +97,46 @@ object Chat : Module(
 
             if (msg.all { it == '-' || it == '=' || it == '▬' }) return@on
 
+            val now = System.currentTimeMillis()
+            if (chatList.size >= MAX_COMPACT_ENTRIES) {
+                val expiry = compactChatTime * 1_000L
+                chatList.entries.removeIf { now - it.value.second >= expiry }
+                if (chatList.size >= MAX_COMPACT_ENTRIES) {
+                    chatList.minByOrNull { it.value.second }?.key?.let(chatList::remove)
+                }
+            }
+
             val data = chatList[msg]
             val lastTime = data?.second
             val id = msg.hashCode()
 
-            if (lastTime != null && System.currentTimeMillis() - lastTime < compactChatTime * 1000) {
+            if (lastTime != null && now - lastTime < compactChatTime * 1_000L) {
                 val count = data.first + 1
+                val generation = compactGeneration
+                // Update eagerly so several duplicates received in the same
+                // client tick increment each other instead of all scheduling
+                // the same stale count.
+                chatList[msg] = Pair(count, now)
                 this.cancel()
 
                 scheduleTask {
+                    // The task is deferred to avoid mutating vanilla's chat
+                    // lists from inside their add-message callback. Do not let
+                    // it resurrect an old-world entry after a reset/disable.
+                    if (!enabled || !compactChat || generation != compactGeneration) return@scheduleTask
+                    val latestCount = chatList[msg]?.first ?: return@scheduleTask
                     val scrollBefore = chatGui.scrolledLines // without this scroll resets every time message gets compacted. visual bug: scroll bar changes colour for a split second. I can't be asked fixing it
                     ChatUtils.removeLines(id, msg)
-                    chatGui.add(text.copy().append(literal(" &7($count)")), id)
-                    chatList[msg] = Pair(count, System.currentTimeMillis())
+                    chatGui.add(text.copy().append(literal(" &7($latestCount)")), id)
                     chatGui.scrolledLines = scrollBefore
                 }
 
                 return@on
             }
-            chatList[msg] = Pair(1, System.currentTimeMillis())
+            chatList[msg] = Pair(1, now)
         }
+
+        on<WorldEvent.Change> { clearCompactState() }
 
         on<GuiEvent.Click> {
             if (!state || !copyChat || screen !is ChatScreen) return@on
@@ -133,6 +161,11 @@ object Chat : Module(
     }
 
     override fun onKeybind() {  }
+
+    override fun onDisable() {
+        super.onDisable()
+        clearCompactState()
+    }
 
     // chat bypass
     private var bypass = false
@@ -174,11 +207,19 @@ object Chat : Module(
     }
 
     fun scroll(amount: Int) {
-        chatGui?.scrollChat(if (isShiftDown) amount else amount * 7)
+        chatGui.scrollChat(if (isShiftDown) amount else amount * 7)
     }
 
     // compact chat
     val chatList = mutableMapOf<String, Pair<Int, Long>>()
+    private var compactGeneration = 0
+
+    private fun clearCompactState() {
+        compactGeneration++
+        chatList.clear()
+    }
+
+    private const val MAX_COMPACT_ENTRIES = 512
 
     // copy chat
     private fun ChatComponent.getFullText(idx: Int): Component? {

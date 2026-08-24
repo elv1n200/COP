@@ -5,6 +5,44 @@ All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Minecraft-26.1.2-Build mit Java 25, automatisierten JVM-Tests und manueller Client-Test-Checkliste.
+- Vollständige Dungeon-Map-Snapshot-Auswertung inklusive unentdecktem Layout und stabilerer Spielerzuordnung.
+- Dungeon Score HUD, Blessing HUD, Room Alerts und Dungeon Warp Cooldown.
+- Goldor-Terminal-Waypoints mit aktuellem Abschnitt und passiver, fail-open Statusauswertung.
+- Item Protection gegen versehentliches Droppen, Verkaufen und Salvagen.
+- Chat-Koordinaten-Waypoints, Commission Display und Mining Ability Alert.
+- Diagnosebericht, Config-Recovery, Security-/Support-Dokumentation und erweiterte Addon-API-Tests.
+- Große Dungeon-Automation-Suite: Auto I4, Class Abilities, Door Opener,
+  Dungeon Potion, Invincibility-Fallbacks, Wither Cloak, Barrier Boom,
+  Last-Breath-Debuffs, Requeue und Architect's Draft.
+- Erweiterte Auto Terms-, Auto Leap-, Dungeon Breaker-, M3 Auto FF-,
+  Terminator- und M7-Twilight-Optionen.
+- Neue allgemeine Automation für Hotbar/Loadouts/Wardrobe, Party-Regeln,
+  Carnival, Chocolate Factory, Auto Sell, Escrow-Retries, Blaze Slayer und Dojo.
+- No Rotate/Zero-Ping-Camera, Defensive Blink und No Break Reset.
+
+### Changed
+
+- Fairy-/Weaver-Ausblendung entfernt keine Entities mehr aus der Client-Welt, sondern unterdrückt nur deren Rendering.
+- Compact-Chat-Zustand ist begrenzt und wird bei Weltwechsel zurückgesetzt.
+- Projektseite, Credits und Third-Party-Hinweise wurden für den aktuellen mc26-Stand überarbeitet.
+- ClickGUI-Hauptkategorien tragen lesbare Namen; neue Features sind in feste
+  Unterkategorien für QoL, Cheats, Automation, Economy, Slayer und Dojo einsortiert.
+- Invasive Automationen koordinieren Hotbar, Inventar, Rotation, Bewegung und
+  Interaktion über zentrale, bei Weltwechsel verfallende Leases.
+- Verdeckte Containeraktionen sind an Welt-, Menü- und State-Snapshots gebunden;
+  verzögerte Klicks oder Close-Pakete können keine neu geöffnete Session mit
+  wiederverwendeter Container-ID treffen.
+
+### Security
+
+- Fremde Noamm-/Quoi-Downloader, WebSockets, Service-Endpunkte und Assets werden nicht übernommen.
+- Auto-Updater, externe Bildladepfade, reguläre Ausdrücke und Config-Ladevorgänge wurden enger validiert bzw. begrenzt.
+
 ## [1.7.2] — 2026-07-05
 
 ### Fixed
@@ -212,6 +250,26 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - Initial public release.
 
+[Unreleased]: https://github.com/elv1n200/COP/commits/mc26
+[1.7.2]: https://github.com/elv1n200/COP/releases/tag/1.7.2
+[1.7.1]: https://github.com/elv1n200/COP/releases/tag/1.7.1
+[1.7.0]: https://github.com/elv1n200/COP/releases/tag/1.7.0
+[1.6.5]: https://github.com/elv1n200/COP/releases/tag/1.6.5
+[1.6.4]: https://github.com/elv1n200/COP/releases/tag/1.6.4
+[1.6.3]: https://github.com/elv1n200/COP/releases/tag/1.6.3
+[1.6.2]: https://github.com/elv1n200/COP/releases/tag/1.6.2
+[1.6.1]: https://github.com/elv1n200/COP/releases/tag/1.6.1
+[1.6.0]: https://github.com/elv1n200/COP/releases/tag/1.6.0
+[1.5.0]: https://github.com/elv1n200/COP/releases/tag/1.5.0
+[1.4.4]: https://github.com/elv1n200/COP/releases/tag/1.4.4
+[1.4.3]: https://github.com/elv1n200/COP/releases/tag/1.4.3
+[1.4.2]: https://github.com/elv1n200/COP/releases/tag/1.4.2
+[1.4.1]: https://github.com/elv1n200/COP/releases/tag/1.4.1
+[1.4.0]: https://github.com/elv1n200/COP/releases/tag/1.4.0
+[1.3.5]: https://github.com/elv1n200/COP/releases/tag/1.3.5
+[1.3.4]: https://github.com/elv1n200/COP/releases/tag/1.3.4
+[1.3.3]: https://github.com/elv1n200/COP/releases/tag/1.3.3
+[1.3.2]: https://github.com/elv1n200/COP/releases/tag/1.3.2
 [1.3.1]: https://github.com/elv1n200/COP/releases/tag/1.3.1
 [1.3.0]: https://github.com/elv1n200/COP/releases/tag/v1.3.0
 [1.2.0]: https://github.com/elv1n200/COP/releases/tag/1.2.0

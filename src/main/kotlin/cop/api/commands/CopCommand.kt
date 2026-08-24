@@ -11,7 +11,6 @@ import cop.api.skyblock.Location.currentServer
 import cop.api.skyblock.Location.inSkyblock
 import cop.api.skyblock.Location.subarea
 import cop.api.skyblock.dungeon.Dungeon
-//import cop.api.skyblock.dungeon.Dungeon.uniqueRooms
 //import cop.api.skyblock.dungeon.map.utils.ScanUtils.currentRoom
 import cop.module.ModuleManager
 import cop.module.impl.misc.Chat
@@ -19,6 +18,7 @@ import cop.module.impl.render.ClickGui.clickGui
 import cop.utils.ChatUtils.command
 import cop.utils.ChatUtils.literal
 import cop.utils.ChatUtils.modMessage
+import cop.utils.DiagnosticsReport
 import cop.utils.Scheduler.scheduleLoop
 import cop.utils.WorldUtils
 import cop.utils.WorldUtils.day
@@ -181,7 +181,7 @@ object CopCommand {
 
                     val msg = listOf(
                         "&e${room.data.name} &7(${room.data.type})",
-                        "&7|&fState: &7${room.data.state}",
+                        "&7|&fState: &7${room.state}",
                         "&7|&fCorner: &7${room.clayPos.x}, ${room.clayPos.y}, ${room.clayPos.z}",
                         "&7|&fRotation: &7${room.rotation} (${room.rotation.deg})",
                         "&7|&fComponents:",
@@ -204,10 +204,6 @@ object CopCommand {
 
                 }
             }
-
-//            "rooms" {
-//                modMessage("Rooms: ${uniqueRooms.joinToString(", ") { it.name }}")
-//            }
 
             "area" {
                 modMessage("Area: $currentArea, Sub: $subarea, Server: $currentServer, Floor: ${Dungeon.floor?.name}")
@@ -255,6 +251,20 @@ object CopCommand {
         }
 
         with(command) {
+            "diagnostics" {
+                runCatching {
+                    mc.keyboardHandler.clipboard = DiagnosticsReport.create()
+                }.onSuccess {
+                    modMessage(
+                        "&aDiagnostics copied to the clipboard. " +
+                            "&7It lists loaded mods and enabled module names, but no player name, server address, token, individual setting value, or path.",
+                    )
+                }.onFailure { error ->
+                    cop.CopMod.logger.warn("[Diagnostics] failed to create or copy report", error)
+                    modMessage("&cCould not copy diagnostics: ${error.message ?: "unknown error"}")
+                }
+            }.description("Copies a privacy-safe support report to the clipboard.")
+
             "toggle" { moduleName: GreedyString ->
                 val module = ModuleManager.getModuleByName(moduleName.string)
                 module?.apply {

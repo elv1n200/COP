@@ -27,7 +27,7 @@ object SnapTap : Module(
 
     private fun resolvePairs(): List<Pair>? {
         if (pairs != null) return pairs
-        val options = mc.options ?: return null
+        val options = mc.options
         pairs = listOf(
             Pair(options.keyLeft, options.keyRight),
             Pair(options.keyRight, options.keyLeft),

@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Support-Checkliste
+    url: https://github.com/elv1n200/COP/blob/mc26/SUPPORT.md
+    about: Vor einem Bug Report Diagnose, Logs und Minimaltest vorbereiten.
   - name: Discord
     url: https://discord.gg/Uc9gVncs6P
-    about: Für schnelle Fragen, allgemeine Diskussion und Live-Support.
+    about: Für kurze Fragen und allgemeine Diskussion; keine Geheimnisse öffentlich posten.

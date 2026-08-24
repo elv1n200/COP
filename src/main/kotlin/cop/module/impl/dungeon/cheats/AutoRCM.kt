@@ -1,176 +1,272 @@
 package cop.module.impl.dungeon.cheats
-import cop.module.impl.dungeon.huds.CooldownDisplay
 
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import net.minecraft.world.item.ItemStack
-import cop.CopMod.scope
 import cop.api.events.MouseEvent
+import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
-import cop.api.skyblock.Island
-import cop.api.skyblock.dungeon.Dungeon.inDungeons
-import cop.api.skyblock.invoke
+import cop.api.skyblock.dungeon.Dungeon
 import cop.module.Module
-import cop.utils.ChatUtils.modMessage
+import cop.module.impl.dungeon.huds.CooldownDisplay
+import cop.utils.Scheduler
+import cop.utils.StringUtils.noControlCodes
 import cop.utils.skyblock.ItemUtils.skyblockId
-import cop.utils.skyblock.ItemUtils.skyblockUuid
-import cop.utils.skyblock.player.PlayerUtils.rightClick
+import cop.utils.skyblock.player.AutomationCoordinator
+import cop.utils.skyblock.player.AutomationCoordinator.Channel.HOTBAR
+import cop.utils.skyblock.player.AutomationCoordinator.Channel.INTERACTION
+import cop.utils.skyblock.player.PlayerUtils
 import cop.utils.skyblock.player.SwapManager
+import cop.utils.skyblock.player.SwapResult
+import net.minecraft.world.item.ItemStack
 
-/**
- * Port of CritsAddons `AutoRCM` (com.github.noamm9.critsaddons.features.impl.critsaddons.AutoRCM).
- *
- * "RCM" = Right-Click Mage. When you right-click while holding the *trigger* item,
- * this swaps to a *swap* item, fires a right-click, then swaps back — useful for
- * chaining a staff cast off of your wand. You configure both items by UUID or
- * SkyBlock ID (easiest via the buttons that read your held item).
- *
- * Requires the sibling `CooldownDisplay` module for the "wait for CD" option to work.
- */
 object AutoRCM : Module(
     "Auto RCM",
-    area = Island.Dungeon,
-    desc = "When you right-click a trigger item, auto-swaps to a chosen item, right-clicks, swaps back."
+    desc = "Uses a configured hotbar ability after a right click with a configured trigger item."
 ) {
-    private val onlyInDungeons by switch("Only in dungeons", true,
-        desc = "Restricts Auto RCM to dungeons only.")
+    private val triggerItem by textInput(
+        "Trigger item",
+        "Terminator",
+        length = 80,
+        desc = "Display-name fragment or SkyBlock key. Prefix with name:, id:, or key: to force one form."
+    )
+    private val abilityItem by textInput(
+        "Ability item",
+        "Hyperion",
+        length = 80,
+        desc = "Hotbar item to swap to and right click. Accepts the same name/key syntax as Trigger item."
+    )
+    private val onlyInDungeons by switch(
+        "Only in dungeons",
+        true,
+        desc = "Requires an active Catacombs instance before accepting a trigger."
+    )
+    private val respectCooldown by switch(
+        "Respect cooldown",
+        true,
+        desc = "Skips the ability while its client-side cooldown is active."
+    )
+    private val preDelay by slider(
+        "Pre delay",
+        0,
+        0,
+        20,
+        1,
+        unit = "t",
+        desc = "Ticks to wait after the user's right click before swapping."
+    )
+    private val clickDelay by slider(
+        "Click delay",
+        1,
+        0,
+        20,
+        1,
+        unit = "t",
+        desc = "Ticks to wait between the hotbar swap and the ability click."
+    )
+    private val returnDelay by slider(
+        "Return delay",
+        1,
+        0,
+        20,
+        1,
+        unit = "t",
+        desc = "Ticks to wait after the ability click before restoring the original slot."
+    )
 
-    private val triggerItemKey by textInput("Trigger item", "",
-        desc = "Item UUID or SkyBlock ID that triggers the swap-click-swap combo.")
-    private val swapItemKey by textInput("Swap item", "",
-        desc = "Item UUID or SkyBlock ID to swap to for the auto right-click.")
+    private enum class Stage { PRE_SWAP, CLICK, RETURN }
 
-    private val setTriggerFromHeld by button("Set trigger from held",
-        desc = "Copies your held item's UUID/ID into the trigger field.") {
-        setKeyFromHeld(isTrigger = true)
-    }
-    private val setSwapFromHeld by button("Set swap from held",
-        desc = "Copies your held item's UUID/ID into the swap field.") {
-        setKeyFromHeld(isTrigger = false)
-    }
+    private data class Action(
+        val originalSlot: Int,
+        var abilitySlot: Int,
+        var dueAt: Long,
+        var stage: Stage = Stage.PRE_SWAP,
+        var swapped: Boolean = false
+    )
 
-    private val preSwapDelayMs by slider("Pre-swap delay", 35, 0, 500, 5, unit = "ms")
-    private val postSwapClickDelayMs by slider("Post-swap delay", 35, 0, 500, 5, unit = "ms")
-    private val returnDelayMs by slider("Return delay", 35, 0, 500, 5, unit = "ms")
-
-    private val waitForCooldown by switch("Wait for CD", true,
-        desc = "While holding right-click, waits for the swap item's cooldown and fires when ready.")
-
-    private var currentJob: Job? = null
-    private var ignoreUntil = 0L
-    private var lastMissingItemMessageAt = 0L
-    private var rightClickConsumed = false
+    private var action: Action? = null
+    private var deferredRestore: Scheduler.Task? = null
+    private var worldEpoch = 0
 
     init {
         on<MouseEvent.Click> {
-            if (button != 1) return@on          // RMB
-            if (!state) {                       // release → reset debounce
-                rightClickConsumed = false
-                return@on
-            }
+            if (button != 1 || !state || action != null || deferredRestore != null) return@on
+            if (!validEnvironment() || mc.screen != null) return@on
 
-            if (rightClickConsumed) return@on
-            if (!tryStart()) return@on
+            val localPlayer = mc.player ?: return@on
+            if (!matches(localPlayer.mainHandItem, triggerItem)) return@on
 
-            rightClickConsumed = true
+            val slot = findAbilitySlot() ?: return@on
+            val stack = localPlayer.inventory.getItem(slot)
+            if (respectCooldown && CooldownDisplay.isOnCooldown(stack)) return@on
+
+            val original = localPlayer.inventory.selectedSlot.takeIf { it in 0..8 } ?: return@on
+            val leaseMillis = ((preDelay + clickDelay + returnDelay + 10L) * 50L).coerceAtLeast(1_000L)
+            if (!AutomationCoordinator.acquire(OWNER, leaseMillis, HOTBAR, INTERACTION)) return@on
+
+            action = Action(
+                originalSlot = original,
+                abilitySlot = slot,
+                dueAt = System.currentTimeMillis() + preDelay * 50L
+            )
         }
+
+        on<TickEvent.End> { processAction() }
 
         on<WorldEvent.Change> {
-            currentJob?.cancel()
-            currentJob = null
-            rightClickConsumed = false
-            ignoreUntil = 0L
+            worldEpoch++
+            cancelAction(restore = false)
         }
     }
 
-    /** @return true if a swap was started (cancels further re-entry). */
-    private fun tryStart(): Boolean {
-        if (onlyInDungeons && !inDungeons) return false
-        if (mc.screen != null) return false
-        if (currentJob?.isActive == true) return false
-        if (System.currentTimeMillis() < ignoreUntil) return false
-
-        val triggerKey = triggerItemKey.trim()
-        val swapKey = swapItemKey.trim()
-        if (triggerKey.isEmpty() || swapKey.isEmpty()) return false
-
-        val player = mc.player ?: return false
-        val held = player.mainHandItem
-        if (!matchesKey(held, triggerKey)) return false
-
-        val originalSlot = player.inventory.selectedSlot.takeIf { it in 0..8 } ?: return false
-        val swapSlot = findHotbarSlotByKey(swapKey)
-        if (swapSlot == null) {
-            maybeMissingItemMessage("&cAuto RCM: swap item is not on your hotbar.")
-            return false
-        }
-        if (swapSlot == originalSlot) return false
-
-        val swapStack = player.inventory.getItem(swapSlot)
-        if (waitForCooldown && CooldownDisplay.isOnCooldown(swapStack)) return false
-
-        currentJob = scope.launch {
-            delay(preSwapDelayMs.toLong())
-            SwapManager.swapToSlot(swapSlot)
-            delay(postSwapClickDelayMs.toLong())
-            mc.player?.rightClick()
-            CooldownDisplay.startRightClickCooldown(
-                mc.player?.inventory?.getItem(swapSlot)
-            )
-            delay(returnDelayMs.toLong())
-            SwapManager.swapToSlot(originalSlot)
-            ignoreUntil = System.currentTimeMillis() + 100L
-        }
-        return true
+    override fun onDisable() {
+        cancelAction(restore = true)
+        super.onDisable()
     }
 
-    private fun setKeyFromHeld(isTrigger: Boolean) {
-        val held = mc.player?.mainHandItem
-        if (held == null || held.isEmpty) {
-            modMessage("&cHold an item first.")
+    private fun processAction() {
+        val pending = action ?: return
+        if (!validEnvironment() || mc.screen != null) {
+            cancelAction(restore = pending.swapped)
             return
         }
-        val key = itemKey(held)
-        if (key == null) {
-            modMessage("&cCould not read UUID/SkyBlock ID from held item.")
+        if (!AutomationCoordinator.extend(OWNER, 1_000L, HOTBAR, INTERACTION)) {
+            cancelAction(restore = false)
             return
         }
 
-        // COP's textInput delegate is read-only; users paste the key into the text field.
-        // We surface it in chat for easy copy.
-        modMessage(
-            "&a${if (isTrigger) "Trigger" else "Swap"} key for held item: &e$key&a (paste into the '${
-                if (isTrigger) "Trigger item" else "Swap item"
-            }' field)."
-        )
-    }
-
-    private fun itemKey(stack: ItemStack): String? =
-        stack.skyblockUuid?.takeIf { it.isNotBlank() }
-            ?: stack.skyblockId?.takeIf { it.isNotBlank() }
-
-    private fun matchesKey(stack: ItemStack, key: String): Boolean {
-        val normalizedKey = normalizeKey(key) ?: return false
-        return normalizeKey(stack.skyblockUuid) == normalizedKey
-            || normalizeKey(stack.skyblockId) == normalizedKey
-    }
-
-    private fun findHotbarSlotByKey(key: String): Int? {
-        val player = mc.player ?: return null
-        for (i in 0..8) {
-            if (matchesKey(player.inventory.getItem(i), key)) return i
-        }
-        return null
-    }
-
-    private fun normalizeKey(value: String?): String? =
-        value?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()
-
-    private fun maybeMissingItemMessage(message: String) {
         val now = System.currentTimeMillis()
-        if (now - lastMissingItemMessageAt < 1_000L) return
-        lastMissingItemMessageAt = now
-        modMessage(message)
+        if (now < pending.dueAt) return
+
+        when (pending.stage) {
+            Stage.PRE_SWAP -> swapForAbility(pending, now)
+            Stage.CLICK -> clickAbility(pending, now)
+            Stage.RETURN -> restoreAfterAbility(pending, now)
+        }
     }
+
+    private fun swapForAbility(pending: Action, now: Long) {
+        val localPlayer = mc.player ?: return cancelAction(restore = false)
+        if (localPlayer.inventory.selectedSlot != pending.originalSlot ||
+            !matches(localPlayer.mainHandItem, triggerItem)
+        ) {
+            cancelAction(restore = false)
+            return
+        }
+
+        if (!matches(localPlayer.inventory.getItem(pending.abilitySlot), abilityItem)) {
+            pending.abilitySlot = findAbilitySlot() ?: return cancelAction(restore = false)
+        }
+
+        val abilityStack = localPlayer.inventory.getItem(pending.abilitySlot)
+        if (respectCooldown && CooldownDisplay.isOnCooldown(abilityStack)) {
+            cancelAction(restore = false)
+            return
+        }
+
+        when (SwapManager.swapToSlot(pending.abilitySlot)) {
+            SwapResult.SUCCESS, SwapResult.ALREADY_SELECTED -> {
+                pending.swapped = pending.abilitySlot != pending.originalSlot
+                pending.stage = Stage.CLICK
+                pending.dueAt = now + clickDelay * 50L
+            }
+            SwapResult.TOO_FAST -> pending.dueAt = now + 50L
+            SwapResult.NOT_FOUND, SwapResult.FAILED -> cancelAction(restore = false)
+        }
+    }
+
+    private fun clickAbility(pending: Action, now: Long) {
+        val localPlayer = mc.player ?: return cancelAction(restore = pending.swapped)
+        val stack = localPlayer.mainHandItem
+        if (localPlayer.inventory.selectedSlot != pending.abilitySlot || !matches(stack, abilityItem)) {
+            cancelAction(restore = pending.swapped)
+            return
+        }
+        if (respectCooldown && CooldownDisplay.isOnCooldown(stack)) {
+            cancelAction(restore = pending.swapped)
+            return
+        }
+
+        PlayerUtils.interact()
+        CooldownDisplay.startRightClickCooldown(stack)
+        pending.stage = Stage.RETURN
+        pending.dueAt = now + returnDelay * 50L
+    }
+
+    private fun restoreAfterAbility(pending: Action, now: Long) {
+        when (SwapManager.swapToSlot(pending.originalSlot)) {
+            SwapResult.SUCCESS, SwapResult.ALREADY_SELECTED -> completeAction()
+            SwapResult.TOO_FAST -> pending.dueAt = now + 50L
+            SwapResult.NOT_FOUND, SwapResult.FAILED -> completeAction()
+        }
+    }
+
+    private fun validEnvironment(): Boolean =
+        enabled && mc.level != null && mc.player != null && (!onlyInDungeons || Dungeon.inDungeons)
+
+    private fun findAbilitySlot(): Int? {
+        val inventory = mc.player?.inventory ?: return null
+        return (0..8).firstOrNull { matches(inventory.getItem(it), abilityItem) }
+    }
+
+    private fun matches(stack: ItemStack, configured: String): Boolean {
+        if (stack.isEmpty) return false
+        val raw = configured.trim()
+        if (raw.isEmpty()) return false
+
+        val separator = raw.indexOf(':')
+        val mode = if (separator > 0) raw.substring(0, separator).trim().lowercase() else ""
+        val value = if (mode in MATCH_MODES) raw.substring(separator + 1).trim() else raw
+        if (value.isEmpty()) return false
+
+        val displayMatches = stack.hoverName.string.noControlCodes.contains(value, ignoreCase = true)
+        val normalizedKey = value.replace(' ', '_').replace('-', '_')
+        val keyMatches = stack.skyblockId?.equals(normalizedKey, ignoreCase = true) == true
+
+        return when (mode) {
+            "name" -> displayMatches
+            "id", "key" -> keyMatches
+            else -> displayMatches || keyMatches
+        }
+    }
+
+    private fun completeAction() {
+        action = null
+        AutomationCoordinator.release(OWNER)
+    }
+
+    private fun cancelAction(restore: Boolean) {
+        deferredRestore?.cancel()
+        deferredRestore = null
+
+        val pending = action
+        action = null
+        val hotbarOwner = AutomationCoordinator.owner(HOTBAR)
+        val restoreIsSafe = hotbarOwner == null || hotbarOwner == OWNER
+        if (!restore || !restoreIsSafe || pending == null || !pending.swapped || mc.player == null) {
+            AutomationCoordinator.release(OWNER)
+            return
+        }
+
+        when (SwapManager.swapToSlot(pending.originalSlot)) {
+            SwapResult.TOO_FAST -> scheduleRestore(pending.originalSlot)
+            else -> AutomationCoordinator.release(OWNER)
+        }
+    }
+
+    private fun scheduleRestore(slot: Int) {
+        val expectedWorld = mc.level
+        val expectedEpoch = worldEpoch
+        if (!AutomationCoordinator.extend(OWNER, 500L, HOTBAR, INTERACTION)) {
+            AutomationCoordinator.release(OWNER)
+            return
+        }
+        deferredRestore = Scheduler.scheduleTaskHandle(1) {
+            deferredRestore = null
+            if (worldEpoch == expectedEpoch && mc.level === expectedWorld && mc.player != null) {
+                SwapManager.swapToSlot(slot)
+            }
+            AutomationCoordinator.release(OWNER)
+        }
+    }
+
+    private val MATCH_MODES = setOf("name", "id", "key")
+    private const val OWNER = "dungeon-auto-rcm"
 }

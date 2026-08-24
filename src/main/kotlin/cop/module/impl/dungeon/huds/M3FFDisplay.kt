@@ -1,93 +1,107 @@
 package cop.module.impl.dungeon.huds
 
-import cop.api.colour.Colour
+import cop.api.abobaui.dsl.px
+import cop.api.abobaui.elements.impl.Text.Companion.shadow
+import cop.api.abobaui.elements.impl.Text.Companion.textSupplied
 import cop.api.events.ChatEvent
 import cop.api.events.WorldEvent
 import cop.api.skyblock.Island
+import cop.api.skyblock.dungeon.Dungeon
+import cop.api.skyblock.dungeon.Floor
 import cop.api.skyblock.invoke
 import cop.module.Module
-import cop.utils.ui.textPair
+import cop.utils.StringUtils.noControlCodes
 import java.util.Locale
 
-/**
- * Master Floor 3 Fire-Freeze HUD.
- *
- * The Professor at the end of M3 spawns a brief vulnerability window five
- * seconds after he says "Oh? You found my Guardians' one weakness?". Players
- * fire their Fire Freeze Staff into that window for max damage. Eyeballing
- * the gap is annoying — this HUD draws a live `M3 FF: 4.21s` countdown so
- * you can time the shot off a number instead.
- *
- * Re-implemented from scratch (May 2026). Behaviour identical to the previous
- * port; the state machine is simpler (a single `Phase` enum), the trigger
- * detection uses a substring match for resilience against Hypixel tweaking
- * the boss name prefix, and the formatter is forced to Locale.US so non-US
- * clients don't render "4,21s" with a comma.
- */
 object M3FFDisplay : Module(
-    "M3 FF Display",
+    "M3 Fire Freeze Display",
     area = Island.Dungeon(3, inBoss = true),
-    desc = "Counts down the ~5s window between the Professor's trigger line and the Fire Freeze opportunity in M3."
+    desc = "Counts down the Professor's Fire Freeze cast window in M3.",
 ) {
-    private const val WINDOW_MILLIS = 5_000L
+    private val showLabel by switch("Show label", true)
+    private val decimalPlaces by slider(
+        "Decimal places",
+        2,
+        0,
+        2,
+        1,
+        desc = "Number of decimal places shown on the timer.",
+    )
+    private val castWindowSeconds by slider(
+        "Cast window",
+        5.0,
+        4.0,
+        6.0,
+        0.05,
+        unit = "s",
+        desc = "Countdown length after the Professor trigger line.",
+    )
 
-    /** Substring on the boss line that triggers the countdown. We match by
-     *  contains rather than equals so any leading prefix variation (server
-     *  re-routes the line through "[BOSS] The Professor:" / "Boss:" / etc)
-     *  doesn't break detection. The original port relied on the exact full
-     *  line — brittle in practice. */
-    private const val TRIGGER_PHRASE = "You found my Guardians' one weakness"
+    @Volatile
+    private var deadlineNanos = 0L
+    private var lastTriggerNanos = 0L
 
-    /** Tiny state machine guarding against double-arm: the trigger line can
-     *  arrive twice in pathological cases (chat re-render, packet replay).
-     *  Only re-arm when the previous countdown has actually expired. */
-    private enum class Phase { Idle, Armed }
-    @Volatile private var phase = Phase.Idle
-    private var fireAtMs = 0L
+    @Suppress("unused")
+    private val timerHud by textHud("M3 Fire Freeze") {
+        visibleIf { preview || remainingNanos() > 0L }
+        val timer = textSupplied(
+            supplier = { formatTimer(if (preview) previewRemainingNanos() else remainingNanos()) },
+            font = font,
+            size = 18.px,
+            colour = colour,
+        )
+        timer.shadow = shadow
+    }.withSettings(::showLabel, ::decimalPlaces, ::castWindowSeconds).setting()
 
     init {
         on<ChatEvent.Receive> {
-            if (phase != Phase.Idle) return@on
-            if (TRIGGER_PHRASE !in message) return@on
-            phase = Phase.Armed
-            fireAtMs = System.currentTimeMillis() + WINDOW_MILLIS
+            if (Dungeon.floor != Floor.M3) return@on
+            if (message.noControlCodes.trim() != TRIGGER_MESSAGE) return@on
+
+            val now = System.nanoTime()
+            if (lastTriggerNanos != 0L && now - lastTriggerNanos < TRIGGER_DEBOUNCE_NANOS) return@on
+            lastTriggerNanos = now
+            deadlineNanos = now + (castWindowSeconds * NANOS_PER_SECOND).toLong()
         }
 
         on<WorldEvent.Change> {
-            phase = Phase.Idle
-            fireAtMs = 0L
+            resetTimer()
         }
-
-        textHud(
-            name = "M3 FF countdown",
-            colour = Colour.CYAN,
-            toggleable = false,
-        ) {
-            visibleIf {
-                if (preview) return@visibleIf true
-                if (phase != Phase.Armed) return@visibleIf false
-                val remaining = fireAtMs - System.currentTimeMillis()
-                if (remaining > 0L) return@visibleIf true
-                // Countdown ran out — return to Idle so the next trigger
-                // line can re-arm. Hide the HUD this frame.
-                phase = Phase.Idle
-                false
-            }
-            textPair(
-                string = "M3 FF:",
-                supplier = {
-                    val secondsRemaining = if (preview) {
-                        WINDOW_MILLIS / 1000.0
-                    } else {
-                        (fireAtMs - System.currentTimeMillis())
-                            .coerceAtLeast(0L) / 1000.0
-                    }
-                    "§e" + String.format(Locale.US, "%.2f", secondsRemaining) + "s"
-                },
-                labelColour = colour,
-                shadow = shadow,
-                font = font,
-            )
-        }.setting()
     }
+
+    override fun onDisable() {
+        resetTimer()
+        super.onDisable()
+    }
+
+    private fun remainingNanos(now: Long = System.nanoTime()): Long =
+        (deadlineNanos - now).coerceAtLeast(0L)
+
+    private fun previewRemainingNanos(): Long =
+        (castWindowSeconds * NANOS_PER_SECOND * 0.64).toLong()
+
+    private fun formatTimer(remainingNanos: Long): String {
+        val totalNanos = (castWindowSeconds * NANOS_PER_SECOND).coerceAtLeast(1.0)
+        val fraction = remainingNanos / totalNanos
+        val timerColour = when {
+            fraction > 2.0 / 3.0 -> "§a"
+            fraction > 1.0 / 3.0 -> "§e"
+            else -> "§c"
+        }
+        val seconds = remainingNanos / NANOS_PER_SECOND
+        val value = String.format(Locale.ROOT, "%.${decimalPlaces}f", seconds)
+        val label = if (showLabel) "Fire Freeze: " else ""
+        return "$label$timerColour${value}s"
+    }
+
+    private fun resetTimer() {
+        deadlineNanos = 0L
+        lastTriggerNanos = 0L
+    }
+
+    private const val NANOS_PER_SECOND = 1_000_000_000.0
+    private const val TRIGGER_DEBOUNCE_NANOS = 10_000_000_000L
+
+    private const val TRIGGER_MESSAGE =
+        "[BOSS] The Professor: Even if you took my barrier down, I can still fight."
 }

@@ -1,10 +1,14 @@
 package cop.mixins;
 
 
+import cop.CopMod;
 import cop.api.input.CatKeyboard;
 import cop.api.input.CatKeys;
+import cop.mixininterfaces.IChatComponent;
 import cop.mixininterfaces.ISearchMode;
 import cop.mixins.accessors.ChatComponentAccessor;
+import cop.utils.ChatSearchBuffer;
+import cop.utils.UserRegex;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jetbrains.annotations.NotNull;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,9 +21,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.awt.*;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 import net.minecraft.client.GuiMessage;
+import net.minecraft.client.GuiMessageTag;
 //? if >= 26 {
 /*import net.minecraft.client.multiplayer.chat.GuiMessageSource;*/
 //? }
@@ -30,6 +35,7 @@ import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MessageSignature;
 
 @Mixin(ChatScreen.class)
 public class ChatScreenMixin extends Screen implements ISearchMode {
@@ -40,7 +46,7 @@ public class ChatScreenMixin extends Screen implements ISearchMode {
     @Unique
     private static final List<GuiMessage> messageBackup = new ObjectArrayList<>();
     @Unique
-    private static final List<Component> queuedMessages = new ObjectArrayList<>();
+    private static final ChatSearchBuffer<GuiMessage, MessageSignature> queuedOperations = new ChatSearchBuffer<>();
     @Unique
     private static String textBeforeSearch = "";
 
@@ -105,30 +111,51 @@ public class ChatScreenMixin extends Screen implements ISearchMode {
         if (activate) {
             messageBackup.clear();
             messageBackup.addAll(accessor.getMessages());
-            queuedMessages.clear();
+            // A previous replay failure leaves its failed suffix here for the
+            // next close attempt. Successful drains leave the buffer empty.
 
             textBeforeSearch = input.getValue();
             input.setValue("");
             input.setTextColor(Color.YELLOW.getRGB());
             doSearch("");
         } else {
-            accessor.getMessages().clear();
-            accessor.getMessages().addAll(messageBackup);
-            messageBackup.clear();
+            try {
+                accessor.getMessages().clear();
+                accessor.getMessages().addAll(messageBackup);
+                messageBackup.clear();
 
-            for (Component queuedMessage : queuedMessages) {
-                //? if >= 26 {
-                /*chatHud.addClientSystemMessage(queuedMessage);*/
-                //? } else {
-                chatHud.addMessage(queuedMessage);
-                //? }
+                IChatComponent replayTarget = (IChatComponent) chatHud;
+                queuedOperations.drain(
+                        (queuedMessage, copId) -> {
+                            replayTarget.cop$beginSearchReplay(copId);
+                            try {
+                                //? if >= 26 {
+                                /*accessor.cop$invokeAddMessage(
+                                        queuedMessage.content(),
+                                        queuedMessage.signature(),
+                                        queuedMessage.source(),
+                                        queuedMessage.tag()
+                                );*/
+                                //? } else {
+                                chatHud.addMessage(queuedMessage.content());
+                                //? }
+                            } finally {
+                                replayTarget.cop$endSearchReplay();
+                            }
+                        },
+                        chatHud::deleteMessage
+                );
+            } catch (RuntimeException replayFailure) {
+                CopMod.INSTANCE.getLogger().error(
+                        "[cop] Failed to restore/replay chat search mutations; "
+                                + queuedOperations.size() + " operation(s) retained for retry",
+                        replayFailure
+                );
+            } finally {
+                input.setValue(textBeforeSearch);
+                input.setTextColor(-2039584);
+                chatHud.rescaleChat();
             }
-            queuedMessages.clear();
-
-            input.setValue(textBeforeSearch);
-            input.setTextColor(-2039584);
-
-            chatHud.rescaleChat();
         }
     }
 
@@ -144,14 +171,15 @@ public class ChatScreenMixin extends Screen implements ISearchMode {
             messages.addAll(messageBackup);
         } else {
             List<GuiMessage> filteredResults;
-            try {
-                Pattern pattern = Pattern.compile(query, Pattern.CASE_INSENSITIVE);
+            Pattern pattern = UserRegex.compilePattern(query, Pattern.CASE_INSENSITIVE);
+            if (pattern != null) {
                 filteredResults = messageBackup.stream()
-                        .filter(msg -> pattern.matcher(msg.content().getString()).find())
+                        .filter(msg -> UserRegex.containsMatch(pattern, msg.content().getString()))
                         .toList();
-            } catch (PatternSyntaxException e) {
+            } else {
+                String literalQuery = query.toLowerCase(Locale.ROOT);
                 filteredResults = messageBackup.stream()
-                        .filter(msg -> msg.content().getString().toLowerCase().contains(query.toLowerCase()))
+                        .filter(msg -> msg.content().getString().toLowerCase(Locale.ROOT).contains(literalQuery))
                         .toList();
             }
 
@@ -172,7 +200,24 @@ public class ChatScreenMixin extends Screen implements ISearchMode {
     }
 
     @Override
-    public void cop$queueMessage(Component message) {
-        queuedMessages.add(message);
+    //? if >= 26 {
+    /*public void cop$queueMessage(Component message, MessageSignature signatureData, GuiMessageSource source, GuiMessageTag indicator, int copId) {
+        queuedOperations.queueMessage(
+                new GuiMessage(mc.gui.getGuiTicks(), message, signatureData, source, indicator),
+                copId
+        );
+    }*/
+    //? } else {
+    public void cop$queueMessage(Component message, int copId) {
+        queuedOperations.queueMessage(
+                new GuiMessage(mc.gui.getGuiTicks(), message, null, null),
+                copId
+        );
+    }
+    //? }
+
+    @Override
+    public void cop$queueDeletion(MessageSignature signatureData) {
+        queuedOperations.queueDeletion(signatureData);
     }
 }

@@ -134,10 +134,10 @@ object CustomTriggers : Module(
                                 groups.forEach { group ->
                                     block(
                                         size(Fill, 50.px),
-                                        colour = theme.panel,
+                                        colour = theme.surfaceContainerLow,
                                         10.radius()
                                     ) {
-                                        outline(theme.border, thickness = 2.px)
+                                        outline(theme.outlineVariant, thickness = 2.px)
                                         cursor(CursorShape.HAND)
                                         hoverEffect(1.1f)
                                         text(
@@ -175,7 +175,7 @@ object CustomTriggers : Module(
                         colour = theme.background,
                         10.radius()
                     ) {
-                        outline(theme.border, thickness = 2.px)
+                        outline(theme.outlineVariant, thickness = 2.px)
                         cursor(CursorShape.HAND)
                         hoverEffect(1.1f)
                         row {
@@ -242,7 +242,7 @@ object CustomTriggers : Module(
                                 colour = theme.background,
                                 5.radius()
                             ) {
-                                outline(theme.border, thickness = 2.px)
+                                outline(theme.outlineVariant, thickness = 2.px)
                                 cursor(CursorShape.HAND)
                                 hoverEffect(1.1f)
                                 row(gap = 5.px) {
@@ -274,23 +274,23 @@ object CustomTriggers : Module(
         }
     }
 
-    private fun ElementScope<*>.drawTrigger(group: String, trigger: Trigger) = block(size(Copying, GroupHeight), theme.panel, 5.radius()) {
+    private fun ElementScope<*>.drawTrigger(group: String, trigger: Trigger) = block(size(Copying, GroupHeight), theme.surfaceContainerLow, 5.radius()) {
         fun isExpanded() = trigger.id in expandedTriggers
 
-        outline(theme.border, 2.px)
+        outline(theme.outlineVariant, 2.px)
 
         val height = Animatable(from = 0.px, to = Bounding, swapIf = isExpanded())
         lateinit var rotation: Rotation.Animated
 
         val inputBg = Colour.Animated(
-            from = theme.panel,
+            from = theme.surfaceContainerLow,
             to = theme.background,
             swapIf = isExpanded()
         )
 
         val inputOl = Colour.Animated(
-            from = theme.panel,
-            to = theme.border,
+            from = theme.surfaceContainerLow,
+            to = theme.outlineVariant,
             swapIf = isExpanded()
         )
 
@@ -351,7 +351,7 @@ object CustomTriggers : Module(
                     switch(
                         trigger::enabled,
                         size = 20.px,
-                        colour = theme.border,
+                        colour = theme.outlineVariant,
                         pos = at(y = Centre)
                     )
 
@@ -484,10 +484,10 @@ object CustomTriggers : Module(
             comps.forEach { comp ->
                 block(
                     size(Copying, 35.px),
-                    colour = theme.panel,
+                    colour = theme.surfaceContainerLow,
                     5.radius()
                 ) {
-                    outline(theme.border, thickness = 2.px)
+                    outline(theme.outlineVariant, thickness = 2.px)
                     hoverEffect(1.1f)
                     cursor(CursorShape.HAND)
 
@@ -523,7 +523,7 @@ object CustomTriggers : Module(
 
             outlineBlock(
                 size(w = Copying, h = 40.px),
-                colour = theme.border,
+                colour = theme.outlineVariant,
                 thickness = 2.px,
                 5.radius()
             ) {
@@ -578,10 +578,10 @@ object CustomTriggers : Module(
 
         block(
             size(400.px, Bounding),
-            theme.panel,
+            theme.surfaceContainerLow,
             7.radius()
         ) {
-            outline(theme.border, 2.px)
+            outline(theme.outlineVariant, 2.px)
             onClick {
                 true
             }

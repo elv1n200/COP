@@ -11,29 +11,41 @@ import cop.api.abobaui.elements.impl.TextInput.Companion.onTextChanged
 import cop.api.customtriggers.TriggerContext
 import cop.config.TypeName
 import cop.utils.ThemeManager.theme
+import cop.utils.UserRegex
 import cop.utils.ui.elements.switch
 import cop.utils.ui.elements.themedInput
 
 @TypeName("message_sent")
 class MessageCondition(var pattern: String = "", var isRegex: Boolean = false) : TriggerCondition {
 
+    @Transient private var cachedPattern: String? = null
+    @Transient private var cachedRegex: Regex? = null
+
     override fun matches(ctx: TriggerContext): Boolean {
         if (ctx !is TriggerContext.Chat) return false
         if (!isRegex) return ctx.message.contains(pattern, ignoreCase = true)
 
-        val regex = Regex(pattern)
-        val match = regex.find(ctx.message) ?: return false
+        val match = compiledRegex()?.let { UserRegex.find(it, ctx.message) } ?: return false
 
         match.groups.forEachIndexed { index, group ->
             if (group != null) ctx.data["%$index%"] = group.value
         }
 
-        Regex("""\(\?<(\w+)>""").findAll(pattern).forEach { res ->
+        NAMED_GROUP.findAll(pattern).forEach { res ->
             val name = res.groupValues[1]
-            match.groups[name]?.let { ctx.data["%$name%"] = it.value }
+            runCatching { match.groups[name] }.getOrNull()
+                ?.let { ctx.data["%$name%"] = it.value }
         }
 
         return true
+    }
+
+    private fun compiledRegex(): Regex? {
+        if (cachedPattern != pattern) {
+            cachedPattern = pattern
+            cachedRegex = UserRegex.compile(pattern)
+        }
+        return cachedRegex
     }
 
     override fun displayString(): String {
@@ -77,5 +89,9 @@ class MessageCondition(var pattern: String = "", var isRegex: Boolean = false) :
                 pos = at(y = Centre)
             )
         }
+    }
+
+    private companion object {
+        val NAMED_GROUP = Regex("""\(\?<(\w+)>""")
     }
 }

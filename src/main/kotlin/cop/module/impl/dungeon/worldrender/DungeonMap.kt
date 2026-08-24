@@ -23,6 +23,11 @@ object DungeonMap : Module(
 
     val roomRadius by slider("Room radius", 5f, 1f, 10f, 1f)
     val darkenMultiplier by slider("Darken multiplier", 0.4f, 0.0f, 1.0f, 0.1f)
+    val showFullLayout by switch(
+        "Show undiscovered layout",
+        true,
+        desc = "Uses only the local Magical Map to show unnamed rooms before their chunks are scanned."
+    )
 
     val bgColour by colourPicker("Background colour", Colour.RGB(38, 85, 12, 0.8f), allowAlpha = true)
     val border by switch("Border")
@@ -63,7 +68,7 @@ object DungeonMap : Module(
         renderMap(config = MapConfig(font = font.selected.get()))
     }.withSettings(
         ::shadow, ::font, ::fontScale,
-        ::roomRadius, ::darkenMultiplier,
+        ::roomRadius, ::darkenMultiplier, ::showFullLayout,
         ::bgColour, ::border, ::borderThickness, ::borderColour,
         ::roomColour, ::normalRoom, ::entranceRoom, ::puzzleRoom, ::trapRoom, ::miniRoom, ::bloodRoom, ::fairyRoom, ::rareRoom,
         ::doorColour, ::normalDoor, ::witherDoor, ::bloodDoor, ::entranceDoor,

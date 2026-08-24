@@ -10,7 +10,11 @@ import org.lwjgl.nanovg.NVGPaint
 import org.lwjgl.nanovg.NanoSVG.*
 import org.lwjgl.nanovg.NanoVG.*
 import org.lwjgl.nanovg.NanoVGGL3.*
+import org.lwjgl.stb.STBImage.stbi_failure_reason
+import org.lwjgl.stb.STBImage.stbi_info_from_memory
 import org.lwjgl.stb.STBImage.stbi_load_from_memory
+import org.lwjgl.stb.STBImage.stbi_image_free
+import org.lwjgl.system.MemoryUtil.NULL
 import org.lwjgl.system.MemoryUtil.memAlloc
 import org.lwjgl.system.MemoryUtil.memFree
 import cop.utils.StringUtils.FORMATTING_CODE_PATTERN
@@ -50,7 +54,7 @@ object NVGRenderer {
 
     init {
         vg = nvgCreate(NVG_ANTIALIAS or NVG_STENCIL_STROKES)
-        require(vg != -1L) { "Failed to initialize NanoVG" }
+        require(vg != NULL) { "Failed to initialize NanoVG" }
     }
 
     fun beginFrame(width: Float = mc.window.width.toFloat(), height: Float = mc.window.height.toFloat()) {
@@ -58,15 +62,20 @@ object NVGRenderer {
 
 //
         nvgBeginFrame(vg, width, height, 1f)
+        scissor = null
+        nvgResetScissor(vg)
         nvgTextAlign(vg, NVG_ALIGN_LEFT or NVG_ALIGN_TOP)
         drawing = true
     }
 
     fun endFrame() {
         if (!drawing) throw IllegalStateException("[NVGRenderer] Not drawing, but called endFrame")
-        nvgEndFrame(vg)
-
-        drawing = false
+        try {
+            nvgEndFrame(vg)
+        } finally {
+            scissor = null
+            drawing = false
+        }
     }
 
     fun push() = nvgSave(vg)
@@ -443,40 +452,78 @@ object NVGRenderer {
     }
 
     private fun getImage(image: Image): Int {
-        return images[image]?.nvg ?: throw IllegalStateException("Image (${image.identifier}) doesn't exist")
+        return images[image]?.nvg ?: throw IllegalStateException("Image (${image.logIdentifier}) doesn't exist")
     }
 
     private fun loadImage(image: Image): Int {
+        val label = image.logIdentifier
         val w = IntArray(1)
         val h = IntArray(1)
         val channels = IntArray(1)
-        val buffer = stbi_load_from_memory(
-            image.buffer(),
-            w,
-            h,
-            channels,
-            4
-        ) ?: throw NullPointerException("Failed to load image: ${image.identifier}")
-        return nvgCreateImageRGBA(vg, w[0], h[0], 0, buffer)
+        try {
+            val encoded = image.buffer()
+            if (!stbi_info_from_memory(encoded, w, h, channels)) {
+                throw IllegalStateException(
+                    "Failed to inspect image $label: ${stbi_failure_reason() ?: "unknown reason"}"
+                )
+            }
+            validateImageDimensions(label, w[0], h[0])
+
+            val decoded = stbi_load_from_memory(
+                encoded,
+                w,
+                h,
+                channels,
+                4
+            ) ?: throw IllegalStateException(
+                "Failed to load image $label: ${stbi_failure_reason() ?: "unknown reason"}"
+            )
+
+            try {
+                validateImageDimensions(label, w[0], h[0])
+                val handle = nvgCreateImageRGBA(vg, w[0], h[0], 0, decoded)
+                check(handle > 0) { "NanoVG failed to create image $label" }
+                return handle
+            } finally {
+                stbi_image_free(decoded)
+            }
+        } finally {
+            image.releaseBuffer()
+        }
     }
 
     private fun loadSVG(image: Image): Int {
-        val vec = image.stream.use { it.bufferedReader().readText() }
-        val svg = nsvgParse(vec, "px", 96f) ?: throw IllegalStateException("Failed to parse ${image.identifier}")
+        val label = image.logIdentifier
+        val vec = Image.readEncodedBytes(image.stream).toString(Charsets.UTF_8)
+        val svg = nsvgParse(vec, "px", 96f) ?: throw IllegalStateException("Failed to parse $label")
 
-        val width = svg.width().toInt()
-        val height = svg.height().toInt()
-        val buffer = memAlloc(width * height * 4)
-
+        var rasterizer = NULL
+        var buffer: ByteBuffer? = null
         try {
-            val rasterizer = nsvgCreateRasterizer()
-            nsvgRasterize(rasterizer, svg, 0f, 0f, 1f, buffer, width, height, width * 4)
-            val nvgImage = nvgCreateImageRGBA(vg, width, height, 0, buffer)
-            nsvgDeleteRasterizer(rasterizer)
-            return nvgImage
+            val width = svg.width().toInt()
+            val height = svg.height().toInt()
+            val rgbaBytes = validateImageDimensions(label, width, height)
+            val pixelBuffer = memAlloc(rgbaBytes)
+            buffer = pixelBuffer
+
+            rasterizer = nsvgCreateRasterizer()
+            check(rasterizer != NULL) { "Failed to create SVG rasterizer for $label" }
+            nsvgRasterize(rasterizer, svg, 0f, 0f, 1f, pixelBuffer, width, height, width * 4)
+            val handle = nvgCreateImageRGBA(vg, width, height, 0, pixelBuffer)
+            check(handle > 0) { "NanoVG failed to create image $label" }
+            return handle
         } finally {
+            if (rasterizer != NULL) nsvgDeleteRasterizer(rasterizer)
             nsvgDelete(svg)
-            memFree(buffer)
+            buffer?.let(::memFree)
+        }
+    }
+
+    private fun validateImageDimensions(identifier: String, width: Int, height: Int): Int {
+        return try {
+            Image.checkedRgbaByteCount(width, height)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("Invalid dimensions for $identifier: ${error.message}", error)
         }
     }
 

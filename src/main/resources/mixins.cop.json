@@ -3,13 +3,10 @@
   "compatibilityLevel": "JAVA_25",
   "minVersion": "0.8",
   "package": "cop.mixins",
-  "refmap": "mixins.cop.refmap.json",
   "injectors": {
     "maxShiftBy": 5
   },
-  "mixins": [
-    "ConnectionMixin"
-  ],
+  "mixins": [],
   "client": [
     "AbstractContainerScreenMixin",
     "AvatarMixin",
@@ -23,6 +20,7 @@
     "ClientLevelMixin",
     "ClientPacketListenerMixin",
     "CommandSuggestionsListMixin",
+    "ConnectionMixin",
     "EntityMixin",
     "EntityRendererMixin",
     "FogRendererMixin",
@@ -50,8 +48,10 @@
     "accessors.CameraAccessor",
     "accessors.ChatComponentAccessor",
     "accessors.InventoryAccessor",
+    "accessors.ItemInHandRendererAccessor",
     "accessors.KeyMappingAccessor",
     "accessors.LocalPlayerAccessor",
+    "accessors.MapItemSavedDataAccessor",
     "accessors.MultiPlayerGameModeAccessor",
     "accessors.ImageButtonAccessor"
   ]

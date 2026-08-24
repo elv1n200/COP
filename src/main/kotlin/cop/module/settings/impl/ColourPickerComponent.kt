@@ -41,7 +41,7 @@ class ColourPickerComponent(
         }
 
     private var stupid = false
-    private var storedValue: Colour.HSB = default
+    private var storedValue: Colour.HSB = default.copy()
     var rainbow: Boolean = false
         private set(enabled) {
             if (field == enabled) return

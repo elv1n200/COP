@@ -51,7 +51,7 @@ object TriggerManager {
             handleEvent(TriggerContext.Key(key))
         }
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             when (packet) {
                 is ClientboundSoundPacket -> {
                     handleEvent(TriggerContext.Sound(packet.sound.registeredName, packet.volume, packet.pitch))

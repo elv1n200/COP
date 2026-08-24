@@ -78,7 +78,7 @@ object TickTimers : Module(
             if (padTick >= 0 && padHud.enabled) padTick--
         }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             when {
                 goldorHud.enabled && message.matches(goldorRegex) -> goldorTick = 60
                 goldorHud.enabled && message.matches(coreOpeningRegex) -> {

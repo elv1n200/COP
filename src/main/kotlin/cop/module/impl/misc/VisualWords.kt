@@ -6,6 +6,7 @@ import cop.config.configList
 import cop.module.Module
 import cop.utils.ChatUtils.literal
 import cop.utils.ChatUtils.modMessage
+import cop.utils.UserRegex
 
 /**
  * Find/replace pass over incoming chat messages — useful for renaming nicks,
@@ -70,14 +71,17 @@ object VisualWords : Module(
         for (e in entries) {
             val before = current
             current = if (regexMode) {
-                runCatching {
-                    val opts = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
-                    Regex(e.match, opts).replace(current, e.replacement)
-                }.getOrDefault(current)
-            } else if (caseSensitive) {
-                current.replace(e.match, e.replacement)
+                val opts = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
+                UserRegex.compile(e.match, opts)
+                    ?.let { UserRegex.replace(it, current, e.replacement) }
+                    ?: current
             } else {
-                current.replace(Regex(Regex.escape(e.match), RegexOption.IGNORE_CASE), e.replacement)
+                UserRegex.replaceLiteral(
+                    input = current,
+                    target = e.match,
+                    replacement = e.replacement,
+                    ignoreCase = !caseSensitive,
+                ) ?: current
             }
             if (current != before) changed = true
         }

@@ -18,6 +18,12 @@ public interface LocalPlayerAccessor {
     @Accessor("yRotLast")
     float getLastYawClient();
 
+    @Accessor("yRotLast")
+    void cop$setLastYawClient(float yaw);
+
     @Accessor("xRotLast")
     float getLastPitchClient();
+
+    @Accessor("xRotLast")
+    void cop$setLastPitchClient(float pitch);
 }

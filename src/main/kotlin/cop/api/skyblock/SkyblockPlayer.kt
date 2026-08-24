@@ -83,7 +83,7 @@ object SkyblockPlayer {
     val AUTOPET_REGEX = Regex("Autopet.*?equipped your.*?\\[Lvl \\d+] (.*?)!.*VIEW RULE")
 
     init {
-        on<ChatEvent.ActionBar> {
+        on<ChatEvent.ActionBarClient> {
 //            if (packet !is ClientboundSystemChatPacket || !packet.overlay) return@on
             val message = message.replace(",", "")
 
@@ -117,11 +117,11 @@ object SkyblockPlayer {
             }
         }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             val msg = message.noControlCodes
             InvincibilityType.entries.firstOrNull { type -> msg.matches(type.regex) }?.proc()
 
-            SUMMON_REGEX.find(msg)?.destructured?.let { (action, name, _) ->
+            SUMMON_REGEX.find(msg)?.destructured?.let { (action, name) ->
                 currentPet =
                     if (action == "summoned")
                         name.trim()

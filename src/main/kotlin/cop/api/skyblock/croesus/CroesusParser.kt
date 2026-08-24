@@ -1,375 +1,564 @@
 package cop.api.skyblock.croesus
 
 import cop.utils.StringUtils.formattedString
-import cop.utils.StringUtils.noControlCodes
 import cop.utils.skyblock.PriceClient
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.core.component.DataComponents
 import net.minecraft.world.inventory.AbstractContainerMenu
+import java.text.Normalizer
+import java.util.Locale
 
-/**
- * Read-only parser for the Croesus NPC's GUIs.
- *
- *  - [inCroesusMenu]    — top-level run-selection screen (title "Croesus").
- *  - [inRunMenu]        — a single-run sub-screen ("Catacombs - Floor X" or
- *                         "Master Catacombs - Floor X").
- *  - [findUnclaimedRunSlots] — which slots on the run-selection screen still
- *                         have unopened chests, for the overlay highlight.
- *  - [parseChests]      — for the run sub-screen, read every tier's tooltip,
- *                         decode contents + cost, look prices up via
- *                         [PriceClient], and return a [ChestInfo] per tier.
- *
- * Adapted from the ChatTriggers AutoCroesus module
- * (github.com/UnclaimedBloom6/RandomStuff/tree/main/AutoCroesus). Lore-shape
- * regexes (chest tier names, "Cost"/"§5§o§aFREE" sentinels, the
- * `§5§o§cNo chests opened yet!` unclaimed marker) come straight from there;
- * the regex format is dictated by Hypixel's actual tooltip text.
- *
- * Item-ID resolution covers:
- *  - Enchanted Books (bazaar id `ENCHANTMENT_[ULTIMATE_]<NAME>_<LEVEL>`)
- *  - Essences        (bazaar id `ESSENCE_<TYPE>`)
- *  - Anything else with a registered display name in the Hypixel items registry.
- */
+/** Reads the Croesus menus without relying on fixed chest positions. */
 object CroesusParser {
+    const val LORE_UNCLAIMED_MARKER = "No chests opened yet"
+    const val BUY_CONFIRM_SLOT = 31
+    const val BUY_BACK_SLOT = 49
+    const val BUY_REROLL_SLOT = 50
+    const val RUN_BACK_SLOT = 30
 
-    /** Chest tier icon slot indices on the run sub-screen, in the order they
-     *  appear in the Hypixel GUI (top-left to bottom-right, skipping borders).
-     *  These are stable across floors — only some are populated for any given run. */
-    private val CHEST_SLOT_INDICES = intArrayOf(11, 12, 13, 14, 15)
-
-    /** A run still has unopened chests if any of its tooltip lines (plain text,
-     *  formatting stripped) contains this substring. The CT script compared
-     *  against the exact legacy-encoded string `§5§o§cNo chests opened yet!`,
-     *  but in modern MC the lore is sent as a proper Component with style on
-     *  the node itself — so the matcher works on the plain `.string` instead
-     *  and is immune to whatever colour codes Hypixel attaches. */
-    const val LORE_UNCLAIMED_MARKER: String = "No chests opened yet"
-
-    /** Chest tier names today: `§7Wood Chest`, `§6Gold Chest`, …; the legacy CT
-     *  regex required no suffix. We match plain text (no colour code group) and
-     *  recover the tier colour via [tierColourCode] from a hardcoded mapping. */
-    private val CHEST_TITLE_REGEX = Regex("^(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)(?: Chest)?$")
-    private val COST_REGEX = Regex("^([\\d,]+) Coins$")
-    private const val COST_FREE = "FREE"
-
-    /** Lore line for an enchanted book. We keep the §-codes here because we
-     *  need the `§d§l` prefix to distinguish ultimate from regular enchants. */
-    private val BOOK_REGEX_FORMATTED = Regex(
-        "^(?:§.)*Enchanted Book \\((§d§l)?([\\w ]+) (\\w+)(?:§.)*\\)\$"
+    private val tiers = listOf("Wood", "Gold", "Diamond", "Emerald", "Obsidian", "Bedrock")
+    private val tierColours = mapOf(
+        "Wood" to "§7",
+        "Gold" to "§6",
+        "Diamond" to "§b",
+        "Emerald" to "§a",
+        "Obsidian" to "§5",
+        "Bedrock" to "§c",
     )
-    /** Plain-text essence line, e.g. `Wither Essence x16`. */
-    private val ESSENCE_REGEX = Regex("^(\\w+) Essence x(\\d+)$")
-    private val NUMERAL_VALUES = mapOf('I' to 1, 'V' to 5, 'X' to 10, 'L' to 50, 'C' to 100, 'D' to 500, 'M' to 1000)
 
-    /** Run-sub-menu titles. Hypixel formats both regular and master mode this way. */
-    private val RUN_TITLE_REGEX = Regex("^(?:Master )?Catacombs - .+$")
+    private enum class LoreState {
+        FIND_CONTENTS,
+        READ_CONTENTS,
+        READ_COST,
+        COMPLETE,
+    }
 
-    /** Buy-confirm screen — opened by clicking a chest tier in the run sub-screen.
-     *  Title is just the tier name (`Wood`, `Gold`, …, `Bedrock`). 6-row chest;
-     *  the buy button sits at [BUY_CONFIRM_SLOT], go-back at [BUY_BACK_SLOT],
-     *  kismet/reroll at [BUY_REROLL_SLOT]. Slot layout verified via debug dump. */
-    private val BUY_CONFIRM_TITLE_REGEX =
-        Regex("^(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)$")
+    private data class TextToken(
+        val value: String,
+        val start: Int,
+        val endExclusive: Int,
+    )
 
-    /** "Open Reward Chest" — clicking this deducts the cost and drops the
-     *  loot straight into the player's inventory (no separate reward GUI). */
-    const val BUY_CONFIRM_SLOT: Int = 31
-    /** "Go Back" button — returns to the run sub-screen. */
-    const val BUY_BACK_SLOT: Int = 49
-    /** "Reroll Chest" (kismet feather). Not used by Phase 3a; reserved for
-     *  the reroll driver in Phase 4. */
-    const val BUY_REROLL_SLOT: Int = 50
+    private data class RewardSource(
+        val plain: String,
+        val formatted: String,
+    )
 
-    /** "Go Back" button in the run sub-screen — returns to the Croesus list.
-     *  4-row chest, slot 30. Verified via debug dump. */
-    const val RUN_BACK_SLOT: Int = 30
-
-    // -- GUI detection ----------------------------------------------------------
+    private sealed interface ReadResult<out T> {
+        data class Value<T>(val value: T) : ReadResult<T>
+        data class Problem(val reason: String) : ReadResult<Nothing>
+    }
 
     fun inCroesusMenu(screen: Screen?): Boolean =
-        screen is AbstractContainerScreen<*> && screen.title.string.trim() == "Croesus"
+        containerTitle(screen)?.equals("Croesus", ignoreCase = true) == true
 
-    fun inRunMenu(screen: Screen?): Boolean =
-        screen is AbstractContainerScreen<*> && RUN_TITLE_REGEX.matches(screen.title.string.trim())
-
-    fun inBuyConfirmMenu(screen: Screen?): Boolean =
-        screen is AbstractContainerScreen<*> &&
-            BUY_CONFIRM_TITLE_REGEX.matches(screen.title.string.trim())
-
-    /** Parse the chest currently displayed in the buy-confirm screen.
-     *
-     *  Slot 31 ("Open Reward Chest") has the same lore structure as a chest
-     *  tier icon on the run sub-screen — `Contents` / items / blank / `Cost` /
-     *  value — so we can reuse [parseChestLore]. The buy-confirm title is the
-     *  bare tier name ("Wood", "Gold", …, "Bedrock") which gives us the tier
-     *  colour for the chat output.
-     *
-     *  Returns null when [title] isn't a recognised tier; otherwise either a
-     *  Success or Failure ChestParseResult. The slot index in the returned
-     *  ChestInfo is [BUY_CONFIRM_SLOT] — callers needing the original run
-     *  sub-screen slot should remember it separately. */
-    fun parseBuyConfirmChest(menu: AbstractContainerMenu, title: String): ChestParseResult? {
-        val tierName = title.trim()
-        val colourCode = TIER_COLOUR_CODE[tierName] ?: return null
-        val lorePlain = lorePlain(menu, BUY_CONFIRM_SLOT)
-            ?: return ChestParseResult.Failure(tierName, "buy-confirm slot $BUY_CONFIRM_SLOT empty")
-        val loreFormatted = loreFormatted(menu, BUY_CONFIRM_SLOT)
-            ?: return ChestParseResult.Failure(tierName, "buy-confirm slot $BUY_CONFIRM_SLOT empty")
-        return parseChestLore(BUY_CONFIRM_SLOT, tierName, colourCode, lorePlain, loreFormatted)
+    fun inRunMenu(screen: Screen?): Boolean {
+        val title = containerTitle(screen) ?: return false
+        return hasNonEmptySuffix(title, "Catacombs - ") ||
+            hasNonEmptySuffix(title, "Master Catacombs - ")
     }
 
-    // -- Run-selection screen ---------------------------------------------------
+    fun inBuyConfirmMenu(screen: Screen?): Boolean {
+        val title = containerTitle(screen) ?: return false
+        return exactTier(title) != null
+    }
 
-    /** Slot indices on the top-level Croesus screen whose tooltip contains
-     *  "No chests opened yet". The overlay uses these to highlight runs the
-     *  user hasn't claimed yet. */
-    fun findUnclaimedRunSlots(menu: AbstractContainerMenu): List<Int> {
-        val out = mutableListOf<Int>()
-        // The run icons live in the upper portion of the chest GUI; iterate
-        // every slot smaller than the player-inventory boundary so we still
-        // catch runs on later pages without hardcoding a page layout.
-        val end = (menu.slots.size - 36).coerceAtMost(54)
-        for (i in 0 until end) {
-            val lore = lorePlain(menu, i) ?: continue
-            if (lore.any { LORE_UNCLAIMED_MARKER in it }) out += i
+    /**
+     * The confirm item arrives after its screen. A missing/empty slot therefore
+     * means "not ready"; a populated but invalid item is a real parse failure.
+     */
+    fun parseBuyConfirmChest(
+        menu: AbstractContainerMenu,
+        title: String,
+    ): ChestParseResult? {
+        val tier = exactTier(title.trim())
+            ?: return ChestParseResult.Failure(
+                title.trim().ifEmpty { "Unknown" },
+                "unexpected buy-confirm title '${title.trim()}'",
+            )
+        val stack = menu.slots.getOrNull(BUY_CONFIRM_SLOT)?.item ?: return null
+        if (stack.isEmpty) return null
+
+        val plainLore = lorePlain(menu, BUY_CONFIRM_SLOT)
+            ?: return ChestParseResult.Failure(tier, "confirmation item has no lore")
+        val formattedLore = loreFormatted(menu, BUY_CONFIRM_SLOT) ?: plainLore
+        val itemName = stack.hoverName.string
+        claimedReason(listOf(itemName) + plainLore)?.let { reason ->
+            return ChestParseResult.Failure(tier, reason)
         }
-        return out
+
+        return parseChestLore(
+            slot = BUY_CONFIRM_SLOT,
+            tier = tier,
+            colour = colourForTier(stack.hoverName.formattedString, tier),
+            plainLore = plainLore,
+            formattedLore = formattedLore,
+        )
     }
 
-    /** Static lookup so the overlay can colour each tier the way Hypixel does
-     *  even though we strip formatting when parsing the item name. */
-    private val TIER_COLOUR_CODE = mapOf(
-        "Wood" to "§7", "Gold" to "§6", "Diamond" to "§b",
-        "Emerald" to "§a", "Obsidian" to "§5", "Bedrock" to "§c",
-    )
+    /** Returns only top-inventory slots whose run lore is explicitly unopened. */
+    fun findUnclaimedRunSlots(menu: AbstractContainerMenu): List<Int> = buildList {
+        for (slot in 0 until topInventorySize(menu)) {
+            val stack = menu.slots.getOrNull(slot)?.item ?: continue
+            if (stack.isEmpty) continue
+            val lines = lorePlain(menu, slot) ?: continue
+            if (lines.any { LORE_UNCLAIMED_MARKER in it }) add(slot)
+        }
+    }
 
-    // -- Run sub-screen ---------------------------------------------------------
-
-    /** Parse every chest tier icon on the current run sub-screen.
-     *  Returns one entry per successfully-parsed tier; tiers whose tooltip
-     *  failed to parse become a [ChestParseResult.Failure] so the overlay
-     *  can show "?" instead of silently dropping them. */
-    fun parseChests(menu: AbstractContainerMenu): List<ChestParseResult> {
-        val results = mutableListOf<ChestParseResult>()
-        // Iterate the top three rows (0..26) — chest tier icons can sit in
-        // various positions across floors, so we filter by name match.
-        val end = (menu.slots.size - 36).coerceAtMost(27)
-        for (i in 0 until end) {
-            val slot = menu.slots.getOrNull(i) ?: continue
-            val stack = slot.item ?: continue
+    /** Parses every recognised chest icon in slot order. */
+    fun parseChests(menu: AbstractContainerMenu): List<ChestParseResult> = buildList {
+        for (slot in 0 until topInventorySize(menu)) {
+            val stack = menu.slots.getOrNull(slot)?.item ?: continue
             if (stack.isEmpty) continue
 
-            // Match on plain text — hover name with all formatting stripped.
-            val plainName = stack.hoverName.string.trim()
-            val titleMatch = CHEST_TITLE_REGEX.matchEntire(plainName) ?: continue
-            val tierName = titleMatch.groupValues[1]
-            val colourCode = TIER_COLOUR_CODE[tierName] ?: "§7"
-
-            // Read lore both ways: plain for marker / item lookups, formatted
-            // for the few places we need the §-code (ultimate book detection).
-            val lorePlain = lorePlain(menu, i) ?: run {
-                results += ChestParseResult.Failure(tierName, "no lore"); continue
+            val itemName = stack.hoverName.string
+            val tier = tierFromChestIcon(itemName) ?: continue
+            val plainLore = lorePlain(menu, slot)
+            if (plainLore == null) {
+                add(ChestParseResult.Failure(tier, "chest icon has no lore"))
+                continue
             }
-            val loreFormatted = loreFormatted(menu, i) ?: run {
-                results += ChestParseResult.Failure(tierName, "no lore"); continue
+            claimedReason(listOf(itemName) + plainLore)?.let { reason ->
+                add(ChestParseResult.Failure(tier, reason))
+                continue
             }
-            results += parseChestLore(i, tierName, colourCode, lorePlain, loreFormatted)
+            val formattedLore = loreFormatted(menu, slot) ?: plainLore
+            add(
+                parseChestLore(
+                    slot = slot,
+                    tier = tier,
+                    colour = colourForTier(stack.hoverName.formattedString, tier),
+                    plainLore = plainLore,
+                    formattedLore = formattedLore,
+                )
+            )
         }
-        return results
+    }
+
+    fun loreFormatted(menu: AbstractContainerMenu, slot: Int): List<String>? {
+        val stack = menu.slots.getOrNull(slot)?.item ?: return null
+        if (stack.isEmpty) return null
+        return stack.get(DataComponents.LORE)?.lines?.map { it.formattedString }
+    }
+
+    fun lorePlain(menu: AbstractContainerMenu, slot: Int): List<String>? {
+        val stack = menu.slots.getOrNull(slot)?.item ?: return null
+        if (stack.isEmpty) return null
+        return stack.get(DataComponents.LORE)?.lines?.map { it.string }
     }
 
     private fun parseChestLore(
         slot: Int,
-        tierName: String,
-        colourCode: String,
-        lorePlain: List<String>,
-        loreFormatted: List<String>,
+        tier: String,
+        colour: String,
+        plainLore: List<String>,
+        formattedLore: List<String>,
     ): ChestParseResult {
-        // Already-bought chests (from a prior session) keep their cosmetic
-        // lore minus the "Cost" / "Click to open!" lines and gain an "already
-        // bought / opened" note. Detect that explicitly so the overlay says
-        // something meaningful instead of "no Cost marker in lore".
-        if (lorePlain.any {
-                val s = it.lowercase()
-                "already bought" in s || "already opened" in s
-            }) {
-            return ChestParseResult.Failure(tierName, "already bought")
+        var state = LoreState.FIND_CONTENTS
+        val rewards = mutableListOf<RewardSource>()
+        var costLine: String? = null
+
+        for ((index, rawLine) in plainLore.withIndex()) {
+            val line = rawLine.trim()
+            when (state) {
+                LoreState.FIND_CONTENTS -> {
+                    if (isSectionHeader(line, "Contents")) state = LoreState.READ_CONTENTS
+                }
+
+                LoreState.READ_CONTENTS -> {
+                    when {
+                        isSectionHeader(line, "Cost") -> state = LoreState.READ_COST
+                        line.isNotEmpty() -> rewards += RewardSource(
+                            plain = line,
+                            formatted = formattedLore.getOrNull(index) ?: rawLine,
+                        )
+                    }
+                }
+
+                LoreState.READ_COST -> {
+                    if (line.isNotEmpty()) {
+                        costLine = line
+                        state = LoreState.COMPLETE
+                    }
+                }
+
+                LoreState.COMPLETE -> Unit
+            }
         }
 
-        // Verified by /copdev croesusdump — Hypixel's chest tooltip is rigid:
-        //   lore[0]            = "Contents"
-        //   lore[1..N]         = one line per item
-        //   lore[N+1]          = ""  (blank separator)
-        //   lore[N+2]          = "Cost"
-        //   lore[N+3]          = "<X> Coins"  or  "FREE"
-        //   ... NOTE / footer lines after, ignored
-        val costIdx = lorePlain.indexOfFirst { it.trim() == "Cost" }
-        if (costIdx < 0 || costIdx + 1 >= lorePlain.size) {
-            return ChestParseResult.Failure(tierName, "no Cost marker in lore")
+        when (state) {
+            LoreState.FIND_CONTENTS -> return failure(tier, "missing Contents section")
+            LoreState.READ_CONTENTS -> return failure(tier, "missing Cost section after Contents")
+            LoreState.READ_COST -> return failure(tier, "missing amount after Cost")
+            LoreState.COMPLETE -> Unit
         }
-        val costLine = lorePlain[costIdx + 1].trim()
-        val cost = parseCost(costLine)
-            ?: return ChestParseResult.Failure(tierName, "unparseable cost: \"$costLine\"")
+        if (rewards.isEmpty()) return failure(tier, "Contents section is empty")
 
-        // The blank line right before "Cost" separates loot from cost section.
-        val blankIdx = costIdx - 1
-        if (blankIdx < 1 || lorePlain[blankIdx].isNotBlank()) {
-            return ChestParseResult.Failure(tierName, "no blank separator before Cost (idx=$blankIdx)")
-        }
-        val lastItem = blankIdx - 1
-        // lore[0] is always "Contents" — items start at lore[1].
-        val firstItem = 1
-        if (firstItem > lastItem) {
-            // Chest with no items (shouldn't happen but guard anyway).
-            return ChestParseResult.Success(ChestInfo(slot, tierName, colourCode, cost, emptyList(), 0.0))
+        val cost = when (val parsed = readCost(costLine.orEmpty())) {
+            is ReadResult.Value -> parsed.value
+            is ReadResult.Problem -> return failure(tier, parsed.reason)
         }
 
-        val items = mutableListOf<RewardItem>()
-        var totalValue = 0.0
-        for (i in firstItem..lastItem) {
-            val plain = lorePlain.getOrNull(i)?.trim() ?: continue
-            if (plain.isEmpty()) continue
-            val formatted = loreFormatted.getOrNull(i) ?: plain
-            val (id, qty) = tryParseLine(plain, formatted)
-            val price = priceFor(id)
-            items += RewardItem(id, qty, price, formatted)
-            totalValue += price * qty
+        val parsedRewards = ArrayList<RewardItem>(rewards.size)
+        for (source in rewards) {
+            when (val parsed = readReward(source)) {
+                is ReadResult.Value -> parsedRewards += parsed.value
+                is ReadResult.Problem -> return failure(tier, parsed.reason)
+            }
         }
-        val sorted = items.sortedByDescending { it.unitValue * it.qty }
+
+        val sortedRewards = parsedRewards.sortedWith(
+            compareByDescending<RewardItem> { it.unitValue * it.qty }
+                .thenBy { it.skyblockId }
+                .thenBy { it.displayName }
+        )
+        val totalValue = sortedRewards.sumOf { it.unitValue * it.qty }
         return ChestParseResult.Success(
-            ChestInfo(slot, tierName, colourCode, cost, sorted, totalValue)
+            ChestInfo(
+                slot = slot,
+                tierName = tier,
+                tierColourCode = colour,
+                cost = cost,
+                items = sortedRewards,
+                totalValue = totalValue,
+            )
         )
     }
 
-    /** Single source of truth for converting an item id to its sell value.
-     *  Enchant books use [PriceClient.getEnchantBookPrice] so the smart
-     *  ULTIMATE_ fallback kicks in for cases like "Bank" / "Wisdom" where the
-     *  plain-text lore doesn't mark them as ultimate but the bazaar id does.
-     *
-     *  Phase 6 hook: items the user flagged worthless via [CroesusLists] are
-     *  treated as zero — the bazaar / AH still has a price but the player
-     *  isn't going to bother selling it, so it shouldn't inflate chest
-     *  profit calculations. */
-    private fun priceFor(id: String): Double {
-        if (CroesusLists.isWorthless(id)) return 0.0
-        if (id.startsWith("ENCHANTMENT_")) {
-            // Split "ENCHANTMENT_<NAME>_<LEVEL>" to feed into getEnchantBookPrice's
-            // smart lookup — that handles both ENCHANTMENT_BANK_1 -> tries
-            // ENCHANTMENT_ULTIMATE_BANK_1 and ENCHANTMENT_ULTIMATE_COMBO_5.
-            val rest = id.removePrefix("ENCHANTMENT_").removePrefix("ULTIMATE_")
-            val lastUnderscore = rest.lastIndexOf('_')
-            if (lastUnderscore > 0) {
-                val name = rest.substring(0, lastUnderscore)
-                val lvl = rest.substring(lastUnderscore + 1).toIntOrNull() ?: 1
-                PriceClient.getEnchantBookPrice(name, lvl)?.let { return it }
+    private fun readCost(line: String): ReadResult<Double> {
+        val tokens = whitespaceTokens(line)
+        if (tokens.size == 1 && tokens[0].value.equals("FREE", ignoreCase = true)) {
+            return ReadResult.Value(0.0)
+        }
+        if (tokens.size != 2 || !tokens[1].value.equals("Coins", ignoreCase = true)) {
+            return ReadResult.Problem("invalid cost '$line'; expected FREE or '<number> Coins'")
+        }
+        val coins = commaGroupedInteger(tokens[0].value)
+            ?: return ReadResult.Problem("invalid coin amount '${tokens[0].value}'")
+        return ReadResult.Value(coins.toDouble())
+    }
+
+    private fun readReward(source: RewardSource): ReadResult<RewardItem> {
+        val tokens = whitespaceTokens(source.plain)
+        if (tokens.isEmpty()) return ReadResult.Problem("empty reward line")
+
+        var quantity = 1
+        var name = source.plain.trim()
+        val suffix = tokens.last()
+        if (suffix.value.length > 1 &&
+            suffix.value[0].equals('x', ignoreCase = true) &&
+            suffix.value.substring(1).all(Char::isDigit)
+        ) {
+            quantity = suffix.value.substring(1).toIntOrNull()
+                ?: return ReadResult.Problem("reward quantity is too large in '${source.plain}'")
+            if (quantity <= 0) {
+                return ReadResult.Problem("reward quantity must be positive in '${source.plain}'")
+            }
+            name = source.plain.substring(0, suffix.start).trimEnd()
+            if (name.isEmpty()) return ReadResult.Problem("reward name is missing in '${source.plain}'")
+        }
+
+        return if (containsIgnoreCase(name, "Enchanted Book")) {
+            readEnchantedBook(name, quantity, source.formatted)
+        } else {
+            readOrdinaryReward(name, quantity, source.formatted)
+        }
+    }
+
+    private fun readEnchantedBook(
+        rewardName: String,
+        quantity: Int,
+        formatted: String,
+    ): ReadResult<RewardItem> {
+        val markerAt = rewardName.indexOf("Enchanted Book", ignoreCase = true)
+        val openAt = rewardName.indexOf('(', markerAt + "Enchanted Book".length)
+        val closeAt = rewardName.indexOfLast { !it.isWhitespace() }
+        if (openAt < 0 || closeAt <= openAt || rewardName[closeAt] != ')' ||
+            matchingCloseParenthesis(rewardName, openAt) != closeAt
+        ) {
+            return ReadResult.Problem(
+                "enchanted book lacks a parenthesized enchant descriptor in '$rewardName'"
+            )
+        }
+
+        val descriptor = rewardName.substring(openAt + 1, closeAt).trim()
+        val descriptorTokens = whitespaceTokens(descriptor)
+        if (descriptorTokens.size < 2) {
+            return ReadResult.Problem("invalid enchanted-book descriptor '$descriptor'")
+        }
+
+        val rankToken = descriptorTokens.last().value
+        val rank = readRank(rankToken)
+            ?: return ReadResult.Problem("invalid enchant rank '$rankToken' in '$descriptor'")
+        val enchantName = descriptor.substring(0, descriptorTokens.last().start).trimEnd()
+        val enchantKey = stableUpperId(enchantName)
+        if (enchantKey.isEmpty()) {
+            return ReadResult.Problem("enchant name is missing in '$descriptor'")
+        }
+
+        val directId = "ENCHANTMENT_${enchantKey}_$rank"
+        val ultimateId = if (enchantKey.startsWith("ULTIMATE_")) {
+            directId
+        } else {
+            "ENCHANTMENT_ULTIMATE_${enchantKey}_$rank"
+        }
+        val itemId = when {
+            isBazaarProduct(directId) -> directId
+            ultimateId != directId && isBazaarProduct(ultimateId) -> ultimateId
+            else -> directId
+        }
+        val unitValue = if (CroesusLists.isWorthless(itemId)) {
+            0.0
+        } else {
+            val enchantPrice = PriceClient.getEnchantBookPrice(enchantKey, rank)
+            if (enchantPrice != null) {
+                validPrice(enchantPrice)
+            } else {
+                marketValue(itemId)
             }
         }
-        // Bazaar sellPrice = what you'd actually get if you converted this item
-        // to coins right now. If it's 0 the item is genuinely worthless for
-        // instant-sale (no buyers) — we do NOT fall back to buyPrice because
-        // that's the *seller* side and listing your own sell order at that
-        // price is aspirational (could take days, price can move).
-        PriceClient.getBazaarSell(id)?.let { return it }
-        // Item isn't on bazaar at all — try AH lowest BIN instead.
-        PriceClient.getLowestBin(id)?.let { return it }
-        // Warm the per-item LBIN cache so subsequent overlay frames get a real
-        // number — first call returns 0, the fetch finishes within ~200ms.
-        PriceClient.ensureLowestBin(id)
+        return ReadResult.Value(
+            RewardItem(
+                skyblockId = itemId,
+                qty = quantity,
+                unitValue = unitValue,
+                displayName = formatted,
+            )
+        )
+    }
+
+    private fun readOrdinaryReward(
+        rewardName: String,
+        quantity: Int,
+        formatted: String,
+    ): ReadResult<RewardItem> {
+        val itemId = essenceId(rewardName)
+            ?: PriceClient.resolveShardId(rewardName)
+            ?: PriceClient.resolveItemId(rewardName)
+            ?: stableUpperId(rewardName).ifEmpty { "UNKNOWN_ITEM" }
+
+        val unitValue = if (CroesusLists.isWorthless(itemId)) {
+            0.0
+        } else {
+            marketValue(itemId)
+        }
+        return ReadResult.Value(
+            RewardItem(
+                skyblockId = itemId,
+                qty = quantity,
+                unitValue = unitValue,
+                displayName = formatted,
+            )
+        )
+    }
+
+    /** Essence bazaar identifiers put ESSENCE before the visible essence type. */
+    private fun essenceId(rewardName: String): String? {
+        val tokens = whitespaceTokens(rewardName)
+        if (tokens.size < 2 || !tokens.last().value.equals("Essence", ignoreCase = true)) return null
+        val type = rewardName.substring(0, tokens.last().start).trimEnd()
+        if (type.isEmpty()) return null
+        return PriceClient.resolveItemId(rewardName)
+            ?: stableUpperId(type).takeIf { it.isNotEmpty() }?.let { "ESSENCE_$it" }
+    }
+
+    private fun readRank(token: String): Int? {
+        if (token.isNotEmpty() && token.all(Char::isDigit)) {
+            return token.toIntOrNull()?.takeIf { it > 0 }
+        }
+        return romanRank(token)
+    }
+
+    /**
+     * A reverse fold computes the value; regenerating the canonical spelling
+     * rejects malformed subtractive forms such as IIX or VX.
+     */
+    private fun romanRank(token: String): Int? {
+        val roman = token.uppercase(Locale.ROOT)
+        if (roman.isEmpty()) return null
+        var previous = 0
+        var total = 0
+        for (index in roman.indices.reversed()) {
+            val value = when (roman[index]) {
+                'I' -> 1
+                'V' -> 5
+                'X' -> 10
+                'L' -> 50
+                'C' -> 100
+                'D' -> 500
+                'M' -> 1000
+                else -> return null
+            }
+            if (value < previous) total -= value else {
+                total += value
+                previous = value
+            }
+            if (total !in 1..3999) return null
+        }
+        return total.takeIf { canonicalRoman(it) == roman }
+    }
+
+    private fun canonicalRoman(number: Int): String {
+        var remaining = number
+        val result = StringBuilder()
+        val symbols = arrayOf(
+            1000 to "M", 900 to "CM", 500 to "D", 400 to "CD",
+            100 to "C", 90 to "XC", 50 to "L", 40 to "XL",
+            10 to "X", 9 to "IX", 5 to "V", 4 to "IV", 1 to "I",
+        )
+        for ((value, symbol) in symbols) {
+            while (remaining >= value) {
+                result.append(symbol)
+                remaining -= value
+            }
+        }
+        return result.toString()
+    }
+
+    private fun commaGroupedInteger(text: String): Long? {
+        if (text.isEmpty()) return null
+        val groups = text.split(',')
+        if (groups.any { it.isEmpty() || !it.all(Char::isDigit) }) return null
+        if (groups.size > 1) {
+            if (groups.first().length !in 1..3) return null
+            if (groups.drop(1).any { it.length != 3 }) return null
+        }
+        return groups.joinToString("").toLongOrNull()
+    }
+
+    private fun whitespaceTokens(text: String): List<TextToken> = buildList {
+        var cursor = 0
+        while (cursor < text.length) {
+            while (cursor < text.length && text[cursor].isWhitespace()) cursor++
+            if (cursor >= text.length) break
+            val start = cursor
+            while (cursor < text.length && !text[cursor].isWhitespace()) cursor++
+            add(TextToken(text.substring(start, cursor), start, cursor))
+        }
+    }
+
+    private fun matchingCloseParenthesis(text: String, openAt: Int): Int {
+        var depth = 0
+        for (index in openAt until text.length) {
+            when (text[index]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                    if (depth < 0) return -1
+                }
+            }
+        }
+        return -1
+    }
+
+    private fun stableUpperId(displayName: String): String {
+        val decomposed = Normalizer.normalize(displayName, Normalizer.Form.NFKD)
+        val result = StringBuilder(decomposed.length)
+        var separatorPending = false
+        for (raw in decomposed) {
+            val character = raw.uppercaseChar()
+            when {
+                character in 'A'..'Z' || character in '0'..'9' -> {
+                    if (separatorPending && result.isNotEmpty() && result.last() != '_') result.append('_')
+                    result.append(character)
+                    separatorPending = false
+                }
+                raw == '\'' || raw == '’' -> Unit
+                else -> separatorPending = result.isNotEmpty()
+            }
+        }
+        return result.toString().trimEnd('_')
+    }
+
+    private fun validPrice(price: Double?): Double =
+        price?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+
+    /** Profit decisions use immediately realisable Bazaar value first. */
+    private fun marketValue(itemId: String): Double {
+        PriceClient.getBazaarSell(itemId)?.let { return validPrice(it) }
+        PriceClient.getLowestBin(itemId)?.let { return validPrice(it) }
+        PriceClient.ensureLowestBin(itemId)
         return 0.0
     }
 
-    private fun parseCost(line: String): Double? {
-        if (line.equals(COST_FREE, ignoreCase = true)) return 0.0
-        val m = COST_REGEX.matchEntire(line) ?: return null
-        return m.groupValues[1].replace(",", "").toDoubleOrNull()
-    }
+    private fun isBazaarProduct(itemId: String): Boolean =
+        PriceClient.getBazaarSell(itemId) != null || PriceClient.getBazaarBuy(itemId) != null
 
-    // -- Single-line parsing (book / essence / item) ----------------------------
-
-    /** Returns (skyblockId, qty). Never null — unknown items get a synthetic
-     *  upper-snake-case id (e.g. "Power Dragon Shard" → "POWER_DRAGON_SHARD")
-     *  so the chest still parses; [priceFor] returns 0 if the bazaar/AH
-     *  doesn't know that id, slightly under-estimating the chest's profit
-     *  rather than declaring the whole chest unparseable.
-     *
-     *  Takes both [plain] (formatting stripped, used for most matches and the
-     *  items-registry display-name lookup) and [formatted] (with § codes,
-     *  needed only to distinguish ultimate from regular enchanted books). */
-    private fun tryParseLine(plain: String, formatted: String): Pair<String, Int> {
-        tryParseBook(formatted)?.let { return it }
-        tryParseEssence(plain)?.let { return it }
-
-        // Ask the items registry for the id by display name. Many regular
-        // items have an "x N" suffix we have to peel off first.
-        val qtyMatch = Regex("^(.+?) x(\\d+)$").matchEntire(plain)
-        val (namePart, qty) = if (qtyMatch != null) {
-            qtyMatch.groupValues[1] to qtyMatch.groupValues[2].toInt()
-        } else plain to 1
-
-        // Resolve via the registry; if that fails, try the Galatea-shard
-        // shape (SHARD_<NAME> rather than <NAME>_SHARD — see PriceClient.
-        // resolveShardId); if that also fails, synthesise a canonical-
-        // looking id from the name itself. Many Hypixel items have IDs that
-        // are just the display name uppercased with spaces replaced by
-        // underscores, so the generic fallback often still hits the bazaar/AH.
-        val id = PriceClient.resolveItemId(namePart)
-            ?: PriceClient.resolveShardId(namePart)
-            ?: namePart.uppercase().replace(' ', '_').replace("'", "")
-        return id to qty
-    }
-
-    private fun tryParseBook(formatted: String): Pair<String, Int>? {
-        val m = BOOK_REGEX_FORMATTED.matchEntire(formatted) ?: return null
-        val ultPrefix = m.groupValues[1]  // "§d§l" if ultimate, else empty
-        val rawName = m.groupValues[2]     // "Ultimate Combo" or "Sharpness"
-        val tierStr = m.groupValues[3]
-
-        val tier = tierStr.toIntOrNull() ?: decodeRoman(tierStr) ?: return null
-        val ultimate = ultPrefix.isNotEmpty()
-        val nameUpper = rawName.uppercase().replace(' ', '_')
-        // Avoid ULTIMATE_ULTIMATE_X if the name already includes "Ultimate".
-        val id = ("ENCHANTMENT_" + (if (ultimate && !nameUpper.startsWith("ULTIMATE_")) "ULTIMATE_" else "") + nameUpper + "_$tier")
-            .replace("ULTIMATE_ULTIMATE_", "ULTIMATE_")
-        return id to 1
-    }
-
-    private fun tryParseEssence(plain: String): Pair<String, Int>? {
-        val m = ESSENCE_REGEX.matchEntire(plain.trim()) ?: return null
-        val type = m.groupValues[1].uppercase()
-        val qty = m.groupValues[2].toIntOrNull() ?: 1
-        return "ESSENCE_$type" to qty
-    }
-
-    private fun decodeRoman(numeral: String): Int? {
-        if (numeral.isEmpty() || numeral.any { it !in NUMERAL_VALUES }) return null
-        var sum = 0
-        var i = 0
-        while (i < numeral.length) {
-            val curr = NUMERAL_VALUES[numeral[i]]!!
-            val next = if (i + 1 < numeral.length) NUMERAL_VALUES[numeral[i + 1]] ?: 0 else 0
-            if (curr < next) { sum += next - curr; i += 2 } else { sum += curr; i++ }
+    private fun claimedReason(lines: List<String>): String? {
+        for (raw in lines) {
+            val line = raw.trim().lowercase(Locale.ROOT)
+            val explicitlyAlready = line.contains("already opened") ||
+                line.contains("already purchased") ||
+                line.contains("already bought") ||
+                line.contains("already claimed")
+            val chestMarkedComplete = line.contains("chest") &&
+                (line.contains("has been opened") ||
+                    line.contains("was opened") ||
+                    line.contains("purchased") ||
+                    line.contains("bought") ||
+                    line.contains("claimed"))
+            if (explicitlyAlready || chestMarkedComplete ||
+                line == "opened" || line == "purchased" || line == "bought" || line == "claimed"
+            ) {
+                return "chest already opened or purchased"
+            }
         }
-        return sum
+        return null
     }
 
-    // -- Helpers ----------------------------------------------------------------
-
-    /** Lore lines of a slot's item, with § formatting codes preserved.
-     *  Needed only for the ultimate-book detection (`§d§l` prefix). */
-    fun loreFormatted(menu: AbstractContainerMenu, slotIndex: Int): List<String>? {
-        val stack = menu.slots.getOrNull(slotIndex)?.item ?: return null
-        if (stack.isEmpty) return null
-        val lore = stack.get(DataComponents.LORE) ?: return null
-        return lore.lines.map { it.formattedString }
+    private fun colourForTier(formattedName: String, tier: String): String {
+        val tierAt = formattedName.indexOf(tier, ignoreCase = true)
+        if (tierAt >= 0) {
+            for (index in tierAt - 2 downTo 0) {
+                if (formattedName[index] != '§' || index + 1 >= formattedName.length) continue
+                val code = formattedName[index + 1].lowercaseChar()
+                if (code in "0123456789abcdef") return "§$code"
+            }
+        }
+        return tierColours.getValue(tier)
     }
 
-    /** Lore lines of a slot's item with all formatting stripped — what we use
-     *  for marker detection and item-name lookups. */
-    fun lorePlain(menu: AbstractContainerMenu, slotIndex: Int): List<String>? {
-        val stack = menu.slots.getOrNull(slotIndex)?.item ?: return null
-        if (stack.isEmpty) return null
-        val lore = stack.get(DataComponents.LORE) ?: return null
-        return lore.lines.map { it.string }
+    private fun tierFromChestIcon(itemName: String): String? {
+        exactTier(itemName.trim())?.let { return it }
+        val words = alphaNumericWords(itemName)
+        if (words.none { it.equals("Chest", ignoreCase = true) }) return null
+        return tiers.firstOrNull { tier -> words.any { it.equals(tier, ignoreCase = true) } }
     }
+
+    private fun alphaNumericWords(text: String): List<String> = buildList {
+        var cursor = 0
+        while (cursor < text.length) {
+            while (cursor < text.length && !text[cursor].isLetterOrDigit()) cursor++
+            if (cursor >= text.length) break
+            val start = cursor
+            while (cursor < text.length && text[cursor].isLetterOrDigit()) cursor++
+            add(text.substring(start, cursor))
+        }
+    }
+
+    private fun failure(tier: String, reason: String): ChestParseResult.Failure =
+        ChestParseResult.Failure(tier, reason)
+
+    private fun isSectionHeader(line: String, expected: String): Boolean {
+        val withoutColon = if (line.endsWith(':')) line.dropLast(1).trimEnd() else line
+        return withoutColon.equals(expected, ignoreCase = true)
+    }
+
+    private fun exactTier(title: String): String? =
+        tiers.firstOrNull { it.equals(title.trim(), ignoreCase = true) }
+
+    private fun containsIgnoreCase(text: String, needle: String): Boolean =
+        text.indexOf(needle, ignoreCase = true) >= 0
+
+    private fun hasNonEmptySuffix(title: String, prefix: String): Boolean =
+        title.startsWith(prefix, ignoreCase = true) && title.drop(prefix.length).isNotBlank()
+
+    private fun containerTitle(screen: Screen?): String? =
+        (screen as? AbstractContainerScreen<*>)?.title?.string?.trim()
+
+    private fun topInventorySize(menu: AbstractContainerMenu): Int =
+        (menu.slots.size - 36).coerceAtLeast(0)
 }

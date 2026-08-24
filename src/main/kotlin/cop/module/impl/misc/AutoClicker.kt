@@ -1,12 +1,14 @@
 package cop.module.impl.misc
 
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import cop.CopMod.scope
 import cop.api.events.MouseEvent
 import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
+import cop.api.skyblock.dungeon.Dungeon
 import cop.config.Config
 import cop.module.Module
 import cop.module.settings.UIComponent.Companion.childOf
@@ -14,10 +16,12 @@ import cop.module.settings.impl.ListSetting
 import cop.utils.ChatUtils.modMessage
 import cop.utils.StringUtils.formattedString
 import cop.utils.skyblock.ItemUtils.skyblockUuid
+import cop.utils.skyblock.ItemUtils.skyblockId
 import cop.utils.skyblock.player.PlayerUtils.isLookingAtBreakable
 import cop.utils.skyblock.player.PlayerUtils.leftClick
 import cop.utils.skyblock.player.PlayerUtils.rightClick
 import kotlin.random.Random
+import net.minecraft.world.phys.BlockHitResult
 
 // https://github.com/Noamm9/CatgirlAddons/blob/main/src/main/kotlin/catgirlroutes/module/impl/misc/AutoClicker.kt
 object AutoClicker: Module(
@@ -36,10 +40,24 @@ object AutoClicker: Module(
     private val rightClick by switch("Right Click", desc = "Toggles the auto clicker for right click.")
     private val rightCps by rangeSlider("Right CPS", 10 to 12, 1, 20).childOf(::rightClick)
 
+    private val terminatorMode by switch(
+        "Terminator Salvation", desc = "Uses Salvation with left clicks while you hold right click on a Terminator.",
+    )
+    private val terminatorCps by slider("Terminator CPS", 7.0, 5.0, 10.0, 0.5).childOf(::terminatorMode)
+    private val protectDungeonSecrets by switch(
+        "Protect dungeon secrets", true,
+        desc = "Does not fire Salvation at protected secret blocks outside the boss.",
+    ).childOf(::terminatorMode)
+
     private var leftJob: Job? = null
     private var rightJob: Job? = null
     private var lastHeldSlot = -1
     private var isMining = false
+    private var nextTerminatorClick = 0L
+    private var terminatorDriftCps = 7.0
+    private var lastTerminatorDriftAt = 0L
+    private val terminatorRandom = java.util.Random()
+    private val clientDispatcher by lazy { mc.asCoroutineDispatcher() }
 
     private fun shouldClick(isLeft: Boolean): Boolean {
         if (mc.screen != null) return false
@@ -116,11 +134,42 @@ object AutoClicker: Module(
     private fun startClicking(isLeft: Boolean) {
         if (isLeft) {
             if (leftJob != null) return
-            leftJob = scope.launch { click(true) }
+            leftJob = scope.launch(clientDispatcher) { click(true) }
         } else {
             if (rightJob != null) return
-            rightJob = scope.launch { click(false) }
+            rightJob = scope.launch(clientDispatcher) { click(false) }
         }
+
+        on<TickEvent.Start> {
+            if (!terminatorMode || mc.screen != null || !mc.options.keyUse.isDown) return@on
+            if (player.mainHandItem.skyblockId != "TERMINATOR" || player.isUsingItem) return@on
+
+            if (protectDungeonSecrets && Dungeon.inDungeons && !Dungeon.inBoss) {
+                val hit = mc.hitResult as? BlockHitResult
+                if (hit != null && Dungeon.isProtectedBlock(hit.blockPos)) return@on
+            }
+
+            val now = System.currentTimeMillis()
+            if (now < nextTerminatorClick) return@on
+            if (now - lastTerminatorDriftAt >= 1_000L) {
+                terminatorDriftCps = (terminatorCps + terminatorRandom.nextGaussian()).coerceIn(5.0, 10.0)
+                lastTerminatorDriftAt = now
+            }
+
+            player.leftClick()
+            var delay = (1_000.0 / terminatorDriftCps).toLong()
+            val noise = terminatorRandom.nextGaussian()
+            delay += if (noise < 0) (noise * 10.0).toLong() else (noise * 25.0).toLong()
+            val roll = terminatorRandom.nextDouble()
+            if (roll < 0.01) delay += terminatorRandom.nextInt(100, 250)
+            else if (roll < 0.03) delay = terminatorRandom.nextInt(5, 15).toLong()
+            nextTerminatorClick = now + delay.coerceAtLeast(5L)
+        }
+    }
+
+    override fun onDisable() {
+        reset()
+        super.onDisable()
     }
 
     private fun stopClicking(isLeft: Boolean) {
@@ -170,5 +219,7 @@ object AutoClicker: Module(
         stopClicking(true)
         stopClicking(false)
         lastHeldSlot = -1
+        nextTerminatorClick = 0L
+        lastTerminatorDriftAt = 0L
     }
 }

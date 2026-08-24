@@ -95,7 +95,7 @@ fun <T : Number> ElementScope<*>.numberInput(
             num = when (unit) {
                 "%" -> (num.coerceIn(0.0, 100.0) / 100.0)
                 "°" -> (num.coerceIn(0.0, 360.0) / 360.0)
-                else -> num.coerceIn(min?.toDouble() ?: Double.MIN_VALUE, max?.toDouble() ?: Double.MAX_VALUE)
+                else -> num.coerceIn(min?.toDouble() ?: -Double.MAX_VALUE, max?.toDouble() ?: Double.MAX_VALUE)
             }
 
             val converted: T = @Suppress("UNCHECKED_CAST") when (ref.get()) {

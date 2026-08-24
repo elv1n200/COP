@@ -46,7 +46,7 @@ object DoorKeys : Module(
     init {
         on<WorldEvent.Change> { tracked = null }
 
-        on<PacketEvent.Received, ClientboundSetEntityDataPacket> {
+        on<PacketEvent.ReceivedClient, ClientboundSetEntityDataPacket> {
             if (Dungeon.inBoss) return@on
             val entity = mc.level?.getEntity(packet.id) as? ArmorStand ?: return@on
             val name = entity.customName?.string?.noControlCodes ?: return@on

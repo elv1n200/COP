@@ -151,6 +151,7 @@ object EtherwarpPathfinder : AbstractPathfinder<EtherPathNode, EtherwarpContext>
         }
     }
 
+    @Synchronized
     private fun getRaycasts(maxDist: Double, pitchStep: Float, yawStep: Float): Raycasts {
         if (maxDist == lastDist && pitchStep == lastPitchStep && yawStep == lastYawStep) {
             cachedRaycasts?.let { return it }

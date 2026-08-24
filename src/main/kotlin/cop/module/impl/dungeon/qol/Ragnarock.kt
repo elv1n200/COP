@@ -45,7 +45,7 @@ object Ragnarock : Module(
     )
 
     init {
-        on<PacketEvent.Received, ClientboundSoundPacket> {
+        on<PacketEvent.ReceivedClient, ClientboundSoundPacket> {
             if (!strengthGainedMessage) return@on
             val sound = packet.sound.value()
             if (sound.location.path != "entity.wolf.death") return@on

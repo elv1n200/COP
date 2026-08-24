@@ -219,10 +219,10 @@ object ThemeManager {
 
         val isDark get() = background.toHSB().brightness < 0.5f
 
-        val chevronImage get() = "chevron.svg".image()
-        val gearImage get() = "gear.svg".image()
-        val moveImage get() = "move.svg".image()
-        val pickerImage get() = "picker.svg".image()
-        val refreshImage get() = "refresh.svg".image()
+        val chevronImage by lazy { "chevron.svg".image() }
+        val gearImage by lazy { "gear.svg".image() }
+        val moveImage by lazy { "move.svg".image() }
+        val pickerImage by lazy { "picker.svg".image() }
+        val refreshImage by lazy { "refresh.svg".image() }
     }
 }

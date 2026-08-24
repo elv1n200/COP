@@ -1,18 +1,24 @@
 package cop.module.impl.dungeon.cheats
 
 import cop.api.events.GuiEvent
+import cop.api.events.PacketEvent
 import cop.api.events.TickEvent
 import cop.api.input.CatKeys
 import cop.api.skyblock.Island
 import cop.api.skyblock.invoke
 import cop.module.Module
+import cop.module.settings.UIComponent.Companion.childOf
+import cop.utils.Scheduler.scheduleTask
 import cop.utils.StringUtils.noControlCodes
 import cop.utils.skyblock.player.ContainerUtils.clickSlot
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
+import net.minecraft.core.component.DataComponents
+import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.item.Item
-import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
+import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.random.Random
@@ -50,6 +56,16 @@ object AutoTerms : Module(
     private val solveRubix   by switch("Rubix",   true)
     private val solveMelody  by switch("Melody",  true)
 
+    private val humanisation by text("Humanisation")
+    private val clickOrder by selector(
+        "Click order", "Human", arrayListOf("Default", "Random", "Human", "Chaotic"),
+        desc = "Human follows nearby slots; Chaotic deliberately chooses the furthest candidate.",
+    ).childOf(::humanisation)
+    private val delayDistribution by selector(
+        "Delay distribution", "Gaussian", arrayListOf("Uniform", "Gaussian"),
+        desc = "Gaussian delays cluster near the middle instead of looking perfectly random.",
+    ).childOf(::humanisation)
+
     private val minDelayMs by slider(
         "Min delay", 80, 0, 500, 10, unit = "ms",
         desc = "Lower bound for the randomized delay between clicks.",
@@ -63,6 +79,24 @@ object AutoTerms : Module(
         desc = "Minimum gap between melody button presses; prevents double-clicks " +
                 "when the moving indicator lingers on the correct column for more than one tick.",
     )
+    private val resyncTimeoutMs by slider(
+        "Server resync timeout", 800, 350, 1_500, 50, unit = "ms",
+        desc = "Waits for Hypixel to confirm each non-Melody click before sending the next one.",
+    ).childOf(::humanisation)
+    private val melodyFirstClickDelayMs by slider(
+        "Melody first click delay", 200, 0, 750, 25, unit = "ms",
+        desc = "Wait after the Melody window opens before allowing the first click.",
+    ).childOf(::solveMelody)
+    private val melodySkip by switch(
+        "Melody skip", desc = "Queues later Melody rows after a confirmed click.",
+    ).childOf(::solveMelody)
+    private val melodySkipMode by selector(
+        "Melody skip mode", "Edges", arrayListOf("Edges", "All"),
+        desc = "Edges only skips when the indicator is at an outer position.",
+    ).childOf(::melodySkip)
+    private val melodySkipFirstRow by switch(
+        "Skip first row", desc = "Allows predictive skipping from Melody's first row.",
+    ).childOf(::melodySkip)
 
     private val toggleKey = keybind(
         "Toggle", CatKeys.KEY_NONE,
@@ -88,7 +122,13 @@ object AutoTerms : Module(
     @Volatile private var nextClickAt: Long = 0L
     @Volatile private var lastClickedSlot: Int = -1
     @Volatile private var lastMelodyClickAt: Long = 0L
+    @Volatile private var lastMelodyLimeSlot: Int = -1
+    @Volatile private var melodyReadyAt: Long = 0L
+    @Volatile private var activeContainerId: Int = -1
+    @Volatile private var awaitingSlot: Int = -1
+    @Volatile private var awaitingUntil: Long = 0L
     @Volatile private var rubixTarget: Int = -1   // index into RUBIX_CYCLE; locked once chosen
+    private val clickedNameSlots = hashSetOf<Int>()
 
     init {
         on<GuiEvent.Open.Post> {
@@ -108,7 +148,13 @@ object AutoTerms : Module(
             nextClickAt = System.currentTimeMillis() + nextDelay()
             lastClickedSlot = -1
             lastMelodyClickAt = 0L
+            lastMelodyLimeSlot = -1
+            melodyReadyAt = System.currentTimeMillis() + melodyFirstClickDelayMs
+            activeContainerId = mc.player?.containerMenu?.containerId ?: -1
+            awaitingSlot = -1
+            awaitingUntil = 0L
             rubixTarget = -1
+            clickedNameSlots.clear()
         }
 
         on<GuiEvent.Close> {
@@ -117,7 +163,43 @@ object AutoTerms : Module(
             nextClickAt = 0L
             lastClickedSlot = -1
             lastMelodyClickAt = 0L
+            lastMelodyLimeSlot = -1
+            melodyReadyAt = 0L
+            activeContainerId = -1
+            awaitingSlot = -1
+            awaitingUntil = 0L
             rubixTarget = -1
+            clickedNameSlots.clear()
+        }
+
+        on<PacketEvent.ReceivedClient> {
+            when (val update = packet) {
+                is ClientboundContainerSetSlotPacket -> {
+                    if (update.containerId == activeContainerId) {
+                        if (active == Type.MELODY && update.slot in 0 until Type.MELODY.slots) {
+                            when {
+                                update.item.item == Items.LIME_STAINED_GLASS_PANE ->
+                                    lastMelodyLimeSlot = update.slot
+                                update.slot == lastMelodyLimeSlot -> lastMelodyLimeSlot = -1
+                            }
+                        }
+                        if (update.slot == awaitingSlot) {
+                            if (active == Type.NAME) clickedNameSlots += update.slot
+                            awaitingSlot = -1
+                            awaitingUntil = 0L
+                        }
+                    }
+                }
+
+                is ClientboundContainerSetContentPacket -> {
+                    if (update.containerId == activeContainerId) {
+                        if (active == Type.MELODY) lastMelodyLimeSlot = -1
+                        if (active == Type.NAME && awaitingSlot >= 0) clickedNameSlots += awaitingSlot
+                        awaitingSlot = -1
+                        awaitingUntil = 0L
+                    }
+                }
+            }
         }
 
         on<TickEvent.End> {
@@ -129,21 +211,33 @@ object AutoTerms : Module(
             // Melody is timing-driven — bypass the random-delay gate so we don't
             // miss the on-beat tick. Its own debounce keeps it from chain-firing.
             if (t == Type.MELODY) {
-                val slot = pickMelody(menu) ?: return@on
+                val melody = melodyState(menu) ?: return@on
                 val now = System.currentTimeMillis()
+                if (now < melodyReadyAt) return@on
                 if (now - lastMelodyClickAt < melodyDebounceMs) return@on
-                player.clickSlot(slot, menu.containerId, button = 2)
+                player.clickSlot(melody.buttonSlot, menu.containerId, button = 2)
                 lastMelodyClickAt = now
-                lastClickedSlot = slot
+                lastClickedSlot = melody.buttonSlot
+                scheduleMelodySkip(menu, melody)
+                lastMelodyLimeSlot = -1
                 return@on
             }
 
-            if (System.currentTimeMillis() < nextClickAt) return@on
+            val now = System.currentTimeMillis()
+            if (awaitingSlot >= 0) {
+                if (now < awaitingUntil) return@on
+                if (lastClickedSlot == awaitingSlot) lastClickedSlot = -1
+                awaitingSlot = -1
+                awaitingUntil = 0L
+            }
+            if (now < nextClickAt) return@on
             val slot = pickSlot(t, menu) ?: return@on
             val button = if (t == Type.RUBIX) pickRubixButton(menu, slot) else 2
             player.clickSlot(slot, menu.containerId, button = button)
             lastClickedSlot = slot
-            nextClickAt = System.currentTimeMillis() + nextDelay()
+            awaitingSlot = slot
+            awaitingUntil = now + resyncTimeoutMs
+            nextClickAt = now + nextDelay()
         }
     }
 
@@ -162,7 +256,7 @@ object AutoTerms : Module(
         Type.NAME    -> pickName(menu)
         Type.COLORS  -> pickColors(menu)
         Type.RUBIX   -> pickRubix(menu)
-        Type.MELODY  -> pickMelody(menu)
+        Type.MELODY  -> melodyState(menu)?.buttonSlot
     }
 
     /** Click the lowest-count remaining red-pane in the chest. */
@@ -179,50 +273,77 @@ object AutoTerms : Module(
                 bestSlot = i
             }
         }
-        return bestSlot.takeIf { it >= 0 }
+        if (bestSlot < 0) return null
+        val candidates = (0 until limit).filter { i ->
+            val item = menu.slots.getOrNull(i)?.item ?: return@filter false
+            item.item == Items.RED_STAINED_GLASS_PANE && item.count == bestCount
+        }
+        return selectCandidate(menu, candidates)
     }
 
     /** Click any remaining red glass pane. */
     private fun pickPanes(menu: AbstractContainerMenu): Int? {
         val limit = Type.PANES.slots
+        val candidates = buildList {
         for (i in 0 until limit) {
             val item = menu.slots.getOrNull(i)?.item ?: continue
             if (item.item != Items.RED_STAINED_GLASS_PANE) continue
             if (i == lastClickedSlot) continue
-            return i
+            add(i)
         }
+        }
+        selectCandidate(menu, candidates)?.let { return it }
         return lastClickedSlot.takeIf { it >= 0 && menu.slots.getOrNull(it)?.item?.item == Items.RED_STAINED_GLASS_PANE }
     }
 
-    /** Click items whose display name starts with `titleArg`, skipping
-     *  enchant-glinted ones (already-correct in NAME terminals). */
+    /** Click items whose display name starts with `titleArg`. Server-added
+     *  glint marks an already-correct item; intrinsically glinting items remain
+     *  valid and are tracked locally so they are clicked exactly once. */
     private fun pickName(menu: AbstractContainerMenu): Int? {
         val letter = titleArg?.lowercase() ?: return null
         val limit = Type.NAME.slots
+        val candidates = buildList {
         for (i in 0 until limit) {
             val item = menu.slots.getOrNull(i)?.item ?: continue
             if (i == lastClickedSlot) continue
+            if (i in clickedNameSlots) continue
             if (item.isEmpty) continue
-            if (item.hasFoil()) continue
+            if (item.hasFoil() && item.item !in INTRINSIC_GLINT_ITEMS) continue
             val name = item.hoverName.string.noControlCodes.lowercase()
-            if (name.startsWith(letter)) return i
+            if (name.startsWith(letter)) add(i)
         }
-        return null
+        }
+        return selectCandidate(menu, candidates)
     }
 
-    /** Click items whose display name contains the prompt colour word. */
+    /** Click items matching the prompt colour, including Hypixel's legacy
+     *  dye aliases (Wool=white, Ink=black, Lapis=blue, ...). */
     private fun pickColors(menu: AbstractContainerMenu): Int? {
-        val colourWord = titleArg?.lowercase() ?: return null
+        val colourWord = titleArg?.lowercase()?.let(::normalizeTerminalColour) ?: return null
         val limit = Type.COLORS.slots
+        val candidates = buildList {
         for (i in 0 until limit) {
             val item = menu.slots.getOrNull(i)?.item ?: continue
             if (i == lastClickedSlot) continue
             if (item.isEmpty) continue
+            if (item.item == Items.BLACK_STAINED_GLASS_PANE) continue
             if (item.hasFoil()) continue
-            val name = item.hoverName.string.noControlCodes.lowercase()
-            if (colourWord in name) return i
+            val name = normalizeTerminalColour(item.hoverName.string.noControlCodes.lowercase())
+            if (name.startsWith(colourWord)) add(i)
         }
-        return null
+        }
+        return selectCandidate(menu, candidates)
+    }
+
+    private fun normalizeTerminalColour(name: String): String {
+        var normalized = name
+        COLOR_ALIASES.forEach { (prefix, replacement) ->
+            if (normalized.startsWith(prefix)) {
+                normalized = replacement + normalized.removePrefix(prefix)
+                return@forEach
+            }
+        }
+        return normalized
     }
 
     // ---- Rubix --------------------------------------------------------------
@@ -237,6 +358,22 @@ object AutoTerms : Module(
         Items.BLUE_STAINED_GLASS_PANE,
     )
 
+    private val COLOR_ALIASES = linkedMapOf(
+        "light gray" to "silver",
+        "wool" to "white",
+        "bone" to "white",
+        "ink" to "black",
+        "lapis" to "blue",
+        "cocoa" to "brown",
+        "dandelion" to "yellow",
+        "rose" to "red",
+        "cactus" to "green",
+    )
+
+    private val INTRINSIC_GLINT_ITEMS: Set<Item> = BuiltInRegistries.ITEM
+        .filterTo(hashSetOf()) { it.components().has(DataComponents.ENCHANTMENT_GLINT_OVERRIDE) }
+        .also { it += Items.GOLDEN_APPLE }
+
     /** The 3×3 grid of colour-cyclable slots inside the chest. */
     private val RUBIX_SLOTS = intArrayOf(12, 13, 14, 21, 22, 23, 30, 31, 32)
 
@@ -244,14 +381,16 @@ object AutoTerms : Module(
         val target = chooseRubixTarget(menu)
         if (target < 0) return null
 
+        val candidates = buildList {
         for (slot in RUBIX_SLOTS) {
             val item = menu.slots.getOrNull(slot)?.item ?: continue
             val idx = RUBIX_CYCLE.indexOf(item.item)
             if (idx < 0) continue
             if (idx == target) continue
-            return slot
+            add(slot)
         }
-        return null
+        }
+        return selectCandidate(menu, candidates)
     }
 
     /** Choose `0=forward (left)` or `1=backward (right)` for the next rubix
@@ -306,20 +445,24 @@ object AutoTerms : Module(
     /** When the moving lime indicator's column matches the magenta target
      *  column (in row 0), return the slot of the column-7 button on the same
      *  row as the lime indicator. */
-    private fun pickMelody(menu: AbstractContainerMenu): Int? {
-        val limit = Type.MELODY.slots
+    private data class MelodyState(val buttonSlot: Int, val buttonRow: Int, val indicatorColumn: Int)
 
-        var limeSlot = -1
+    private fun melodyState(menu: AbstractContainerMenu): MelodyState? {
+        val limit = Type.MELODY.slots
+        val limeSlot = lastMelodyLimeSlot.takeIf { slot ->
+            slot in 0 until limit &&
+                menu.slots.getOrNull(slot)?.item?.item == Items.LIME_STAINED_GLASS_PANE
+        } ?: return null
+
         var magentaCol = -1
         for (i in 0 until limit) {
             val item = menu.slots.getOrNull(i)?.item ?: continue
-            when (item.item) {
-                Items.LIME_STAINED_GLASS_PANE    -> if (limeSlot < 0) limeSlot = i
-                Items.MAGENTA_STAINED_GLASS_PANE -> if (magentaCol < 0) magentaCol = i % 9
-                else -> {}
+            if (item.item == Items.MAGENTA_STAINED_GLASS_PANE) {
+                magentaCol = i % 9
+                break
             }
         }
-        if (limeSlot < 0 || magentaCol < 0) return null
+        if (magentaCol < 0) return null
 
         val limeCol = limeSlot % 9
         if (limeCol != magentaCol) return null
@@ -327,7 +470,45 @@ object AutoTerms : Module(
         val limeRow = limeSlot / 9
         val buttonSlot = limeRow * 9 + 7  // column 7 of the lime's row
         if (buttonSlot >= limit) return null
-        return buttonSlot
+        val logicalRow = ((buttonSlot - 16) / 9).coerceIn(0, 3)
+        return MelodyState(buttonSlot, logicalRow, limeCol)
+    }
+
+    private fun scheduleMelodySkip(menu: AbstractContainerMenu, melody: MelodyState) {
+        if (!melodySkip || melody.buttonRow >= 3) return
+        if (!melodySkipFirstRow && melody.buttonRow == 0 && melody.indicatorColumn != 5) return
+        if (melodySkipMode.selected == "Edges" && melody.indicatorColumn !in setOf(1, 5)) return
+
+        val containerId = menu.containerId
+        for (offset in 1..(3 - melody.buttonRow)) {
+            scheduleTask(offset) {
+                val player = mc.player ?: return@scheduleTask
+                if (!enabled || active != Type.MELODY || activeContainerId != containerId) return@scheduleTask
+                if (player.containerMenu !== menu || player.containerMenu.containerId != containerId) return@scheduleTask
+                player.clickSlot(melody.buttonSlot + offset * 9, containerId, button = 2)
+            }
+        }
+    }
+
+    private fun selectCandidate(menu: AbstractContainerMenu, candidates: List<Int>): Int? {
+        if (candidates.isEmpty()) return null
+        return when (clickOrder.selected) {
+            "Random" -> candidates.random()
+            "Human", "Chaotic" -> {
+                val anchor = lastClickedSlot.takeIf { it >= 0 } ?: (candidates.maxOrNull() ?: 0) / 2
+                val sorted = candidates.shuffled().sortedBy { slotDistanceSquared(menu, it, anchor) }
+                if (clickOrder.selected == "Chaotic") sorted.last() else sorted.first()
+            }
+            else -> candidates.first()
+        }
+    }
+
+    private fun slotDistanceSquared(menu: AbstractContainerMenu, first: Int, second: Int): Int {
+        val a = menu.slots.getOrNull(first) ?: return Int.MAX_VALUE
+        val b = menu.slots.getOrNull(second) ?: return Int.MAX_VALUE
+        val dx = a.x - b.x
+        val dy = a.y - b.y
+        return dx * dx + dy * dy
     }
 
     // ---- helpers ------------------------------------------------------------
@@ -335,10 +516,16 @@ object AutoTerms : Module(
     private fun nextDelay(): Long {
         val lo = minDelayMs.toLong()
         val hi = max(lo, maxDelayMs.toLong())
-        return if (lo == hi) lo else Random.nextLong(lo, hi + 1)
+        if (lo == hi) return lo
+        if (delayDistribution.selected == "Uniform") return Random.nextLong(lo, hi + 1)
+
+        // Box-Muller normal distribution, clamped to the configured range.
+        val u1 = Random.nextDouble().coerceAtLeast(1e-9)
+        val u2 = Random.nextDouble()
+        val normal = kotlin.math.sqrt(-2.0 * kotlin.math.ln(u1)) * kotlin.math.cos(2.0 * Math.PI * u2)
+        val mean = (lo + hi) / 2.0
+        val sigma = (hi - lo) / 6.0
+        return (mean + normal * sigma).toLong().coerceIn(lo, hi)
     }
 
-    /** True if the stack has the enchantment glint visual (used by Hypixel to
-     *  mark "already-correct" items in NAME and COLORS terminals). */
-    private fun ItemStack.hasFoil(): Boolean = !isEmpty && this.isEnchanted
 }

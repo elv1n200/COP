@@ -1,4 +1,10 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
+import org.gradle.api.tasks.testing.Test
+import java.nio.file.FileSystems
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.FileTime
 
 plugins {
     // mc26: non-obfuscated loom plugin (no remap, no mappings config).
@@ -16,11 +22,9 @@ plugins {
 // is configuring, and `versionMatrix` maps that to the matching dep set.
 //
 // Useful tasks:
-//   ./gradlew build                                    builds the active version
-//   ./gradlew "Reset active project"                   reset to default
-//   ./gradlew "Set active project to 1.21.11"          switch active version
-//   ./gradlew chiseledBuild                            builds *all* versions
-//   ./gradlew chiseledBuildAndCollect                  ↑ + collects jars in dist/
+//   ./gradlew build                                    builds the configured 26.1.2 target
+//   ./gradlew :26.1.2:build                            builds that target explicitly
+//   ./gradlew buildAll                                 builds and collects into dist/
 // ---------------------------------------------------------------------------
 data class McVersionInfo(
     val minecraft: String,
@@ -111,6 +115,8 @@ dependencies {
             include("org.lwjgl:lwjgl-nanovg:$it:natives-$v")
         }
     }
+
+    testImplementation(kotlin("test"))
 }
 
 loom {
@@ -140,6 +146,47 @@ afterEvaluate {
 }
 
 tasks {
+    withType<AbstractArchiveTask>().configureEach {
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+    }
+
+    jar {
+        from(rootProject.file("LICENSE"))
+        from(rootProject.file("CREDITS.md"))
+        from(rootProject.file("THIRD_PARTY_NOTICES.md"))
+        from(rootProject.file("LICENSES")) {
+            into("LICENSES")
+        }
+
+        // Loom nests `include(...)` dependencies after Gradle creates the jar,
+        // assigning those entries the current time. Normalize only those
+        // late-added entries so clean builds remain byte-for-byte repeatable.
+        doLast {
+            val archivePath = archiveFile.get().asFile.toPath()
+            FileSystems.newFileSystem(archivePath).use { zipFileSystem ->
+                val nestedJarDirectory = zipFileSystem.getPath("/META-INF/jars")
+                if (Files.isDirectory(nestedJarDirectory)) {
+                    val reproducibleTimestamp = FileTime.fromMillis(318_207_600_000L)
+                    Files.list(nestedJarDirectory).use { nestedJars ->
+                        nestedJars
+                            .filter { Files.isRegularFile(it) }
+                            .forEach {
+                                Files.getFileAttributeView(it, BasicFileAttributeView::class.java)
+                                    .setTimes(reproducibleTimestamp, reproducibleTimestamp, reproducibleTimestamp)
+                            }
+                    }
+                    Files.getFileAttributeView(nestedJarDirectory, BasicFileAttributeView::class.java)
+                        .setTimes(reproducibleTimestamp, reproducibleTimestamp, reproducibleTimestamp)
+                }
+            }
+        }
+    }
+
+    withType<Test>().configureEach {
+        useJUnitPlatform()
+    }
+
     processResources {
         // Build the expansion map explicitly so MC-version-specific values come
         // from `mcInfo` (selected by stonecutter active version) rather than
@@ -175,8 +222,8 @@ tasks {
         options.compilerArgs.addAll(listOf("-Xlint:deprecation", "-Xlint:unchecked"))
     }
 
-    // Per-version "build + collect into dist/" task. Stonecutter aggregates
-    // these across all subprojects.
+    // Per-version "build + collect into dist/" task. The root buildAll task
+    // aggregates these across all Stonecutter subprojects.
     register<Copy>("buildAndCollect") {
         group = "build"
         description = "Builds this MC version and copies its jar into dist/."

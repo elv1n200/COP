@@ -63,15 +63,7 @@ class SliderComponent<E>(
     }
 
     override fun read(element: JsonElement) {
-        element.asNumber?.let {
-            value = when (default) {
-                is Int -> it.toInt()
-                is Float -> it.toFloat()
-                is Long -> it.toLong()
-                is Double -> it.toDouble()
-                else -> it
-            } as E
-        }
+        set(element.asNumber)
     }
 
     override fun ElementScope<*>.draw(asSub: Boolean): ElementScope<*> = column(size(Copying), gap = 5.px) {

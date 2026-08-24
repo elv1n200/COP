@@ -2,6 +2,10 @@ package cop.mixins;
 
 import cop.module.impl.player.CameraHelper;
 import cop.module.impl.player.Tweaks;
+import cop.module.impl.player.cheats.NoRotate;
+import cop.mixins.accessors.CameraAccessor;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.Camera;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Pose;
@@ -14,6 +18,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import static cop.module.impl.render.RenderOptimiser.should;
 
@@ -30,6 +35,21 @@ public class CameraMixin {
 
     @Shadow
     private float eyeHeightOld;
+
+    @Inject(
+            method = "update",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/Camera;alignWithEntity(F)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void cop$zeroPingCamera(DeltaTracker deltaTracker, CallbackInfo ci) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!minecraft.options.getCameraType().isFirstPerson()) return;
+        var predicted = NoRotate.predictedCameraPosition();
+        if (predicted != null) ((CameraAccessor) this).cop$invokeSetPosition(predicted);
+    }
 
     @Redirect(
             method = "tick",

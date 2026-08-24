@@ -1,16 +1,18 @@
 package cop.module.impl.mining
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import net.minecraft.client.multiplayer.ClientLevel
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.chunk.LevelChunk
-import cop.CopMod.scope
+import net.minecraft.world.level.chunk.status.ChunkStatus
+import cop.CopMod.logger
 import cop.api.colour.Colour
 import cop.api.colour.withAlpha
 import cop.api.events.RenderEvent
+import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
+import cop.api.events.core.EventBus
 import cop.api.skyblock.Island
 import cop.module.Module
 import cop.module.impl.mining.CrystalHollowsMap.X_MAX
@@ -31,7 +33,7 @@ import cop.utils.render.drawFilledBox
 import cop.utils.render.drawStyledBox
 import cop.utils.render.drawText
 import cop.utils.vec3
-import java.util.concurrent.ConcurrentHashMap
+import java.util.ArrayDeque
 import kotlin.math.absoluteValue
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -50,35 +52,62 @@ object CrystalHollowsScanner : Module(
     private val fillColour by colourPicker("Fill colour", Colour.WHITE.withAlpha(0.33f), allowAlpha = true).visibleIf { style.selected == "Filled box" && routeScanner && !fillDistCols }
     private val thickness by slider("Thickness", 4f, 1f, 8f, 1f).visibleIf { routeScanner }
 
+    private const val STRUCTURE_MAX_Y = 179
+    private const val ROUTE_MAX_Y = 70
+    private const val MIN_BLOCKS_PER_TICK = 256
+    private const val SCAN_BUDGET_NANOS = 2_000_000L
+
+    /**
+     * Scanner state is confined to the Minecraft client thread. Keeping these
+     * as ordinary collections is then both cheaper and safer than mixing a
+     * concurrent map with non-thread-safe values.
+     */
     val scannedChunks = HashSet<Long>()
-    private val foundStructures = ConcurrentHashMap<Structure, MutableList<BlockPos>>()
+    private val foundStructures = mutableMapOf<Structure, MutableList<BlockPos>>()
     val foundRouteBlocks = mutableListOf<BlockPos>()
+    private val foundRouteBlockKeys = HashSet<Long>()
+    private val pendingScans = ArrayDeque<ChunkScan>()
+    private var scanWorld: ClientLevel? = null
+
+    private data class ChunkScan(
+        val world: ClientLevel,
+        val chunk: LevelChunk,
+        val key: Long,
+        val scanStructures: Boolean,
+        val scanRoutes: Boolean,
+        val minX: Int,
+        val maxX: Int,
+        val minZ: Int,
+        val maxZ: Int,
+        val minY: Int,
+        val maxY: Int,
+        var x: Int = minX,
+        var z: Int = minZ,
+        var y: Int = minY,
+    ) {
+        fun advance(): Boolean {
+            y++
+            if (y <= maxY) return true
+            y = minY
+
+            z++
+            if (z <= maxZ) return true
+            z = minZ
+
+            x++
+            return x <= maxX
+        }
+    }
 
     init {
         on<WorldEvent.Chunk.Load> {
             if (!structureScanner && !routeScanner) return@on
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val chunkX = chunk.pos.x shl 4
-                    val chunkZ = chunk.pos.z shl 4
+            if (mc.isSameThread) enqueueChunk(chunk)
+            else mc.execute { enqueueChunk(chunk) }
+        }
 
-                    if (chunkX !in X_MIN..X_MAX || chunkZ !in Z_MIN..Z_MAX) return@launch
-
-                    // 26.x renamed ChunkPos.toLong() -> pack().
-                    val chunkKey =
-                        //? if >= 26 {
-                        /*chunk.pos.pack()*/
-                        //? } else {
-                        chunk.pos.toLong()
-                        //? }
-
-                    if (!scannedChunks.contains(chunkKey)) {
-                        scannedChunks.add(chunkKey)
-                        handleChunk(chunk)
-                        if (CrystalHollowsMap.enabled) isDirty = true
-                    }
-                } catch (_: Exception) { }
-            }
+        on<TickEvent.End> {
+            processPendingScans()
         }
 
         on<RenderEvent.World> {
@@ -107,71 +136,165 @@ object CrystalHollowsScanner : Module(
             }
         }
 
-        on<WorldEvent.Change> {
-            scannedChunks.clear()
-            foundStructures.clear()
-            foundRouteBlocks.clear()
+        // World cleanup must also run while the module is disabled. Module
+        // listeners are unregistered on disable, so this lifecycle hook is
+        // intentionally registered directly for the application's lifetime.
+        EventBus.on<WorldEvent.Change> {
+            if (mc.isSameThread) resetScanner(null)
+            else mc.execute { resetScanner(null) }
         }
     }
 
-    private fun handleChunk(chunk: LevelChunk) {
-        val fromY = if (structureScanner && !routeScanner) 30 else 0
-        val toY = if (routeScanner && !structureScanner) 70 else 180
-        for (x in 0..15) {
-            for (z in 0..15) {
-                for (y in fromY..toY) {
-                    val pos = BlockPos(chunk.pos.minBlockX + x, y, chunk.pos.minBlockZ + z)
+    private fun enqueueChunk(chunk: LevelChunk) {
+        val world = chunk.level as? ClientLevel ?: return
+        if (scanWorld !== world) resetScanner(world)
 
-                    if (structureScanner) Structure.entries.forEach { structure ->
-                        if (!structure.quarter.test(pos)) return@forEach
+        val chunkMinX = chunk.pos.minBlockX
+        val chunkMinZ = chunk.pos.minBlockZ
+        val minX = maxOf(0, X_MIN - chunkMinX)
+        val maxX = minOf(15, X_MAX - chunkMinX)
+        val minZ = maxOf(0, Z_MIN - chunkMinZ)
+        val maxZ = minOf(15, Z_MAX - chunkMinZ)
+        if (minX > maxX || minZ > maxZ) return
 
-                        if (structure.canBeMultiple) {
-                            val existing = foundStructures[structure] ?: mutableListOf()
-                            if (existing.any { it.isWithinChunks(pos, 4) }) return@forEach
-                        } else {
-                            if (foundStructures.containsKey(structure)) return@forEach
-                        }
+        val scanStructures = structureScanner
+        val scanRoutes = routeScanner
+        val minY = maxOf(if (scanStructures && !scanRoutes) 30 else 0, world.minY)
+        val maxY = minOf(if (scanRoutes && !scanStructures) ROUTE_MAX_Y else STRUCTURE_MAX_Y, world.maxY - 1)
+        if (minY > maxY) return
 
-                        if (scanStructure(chunk, structure, x, y, z)) {
-                            val realPos = pos.offset(structure.xOffset, structure.yOffset, structure.zOffset)
-                            foundStructures.computeIfAbsent(structure) { mutableListOf() }.add(realPos)
-                            ChatUtils.modMessage("Found ${structure.displayName} at ${pos.x}, ${pos.y}, ${pos.z}")
-                        }
-                    }
+        // 26.x renamed ChunkPos.toLong() -> pack().
+        val key =
+            //? if >= 26 {
+            /*chunk.pos.pack()*/
+            //? } else {
+            chunk.pos.toLong()
+            //? }
+        if (!scannedChunks.add(key)) return
 
-                    if (routeScanner) {
-                        if (chunk.getBlockState(pos).block != Blocks.COBBLESTONE || y > 70) continue
-                        val valid = Direction.entries.filter { it != Direction.DOWN }.all {
-                            val state = chunk.level.getBlockState(pos.relative(it))
-                            state.isAir || state.block.registryName.contains("glass")
-                        }
+        pendingScans.addLast(
+            ChunkScan(
+                world = world,
+                chunk = chunk,
+                key = key,
+                scanStructures = scanStructures,
+                scanRoutes = scanRoutes,
+                minX = minX,
+                maxX = maxX,
+                minZ = minZ,
+                maxZ = maxZ,
+                minY = minY,
+                maxY = maxY,
+            )
+        )
+        isDirty = true
+    }
 
-                        if (valid && pos !in foundRouteBlocks) {
-                            foundRouteBlocks.add(pos)
-                        }
-                    }
+    private fun processPendingScans() {
+        val world = mc.level ?: return
+        if (scanWorld !== world) {
+            resetScanner(world)
+            return
+        }
+
+        val deadline = System.nanoTime() + SCAN_BUDGET_NANOS
+        var processed = 0
+        var validatedScan: ChunkScan? = null
+        while (pendingScans.isNotEmpty() && (processed < MIN_BLOCKS_PER_TICK || System.nanoTime() < deadline)) {
+            val scan = pendingScans.peekFirst()
+            if (validatedScan !== scan) {
+                val loadedChunk = world.getChunk(
+                    scan.chunk.pos.x,
+                    scan.chunk.pos.z,
+                    ChunkStatus.FULL,
+                    false,
+                )
+                if (scan.world !== world || loadedChunk !== scan.chunk) {
+                    pendingScans.removeFirst()
+                    scannedChunks.remove(scan.key)
+                    isDirty = true
+                    continue
                 }
+                validatedScan = scan
+            }
+
+            try {
+                scanBlock(scan)
+            } catch (e: Exception) {
+                logger.warn("Failed to scan Crystal Hollows chunk ${scan.chunk.pos}", e)
+                pendingScans.removeFirst()
+                scannedChunks.remove(scan.key)
+                isDirty = true
+                validatedScan = null
+                continue
+            }
+            processed++
+            if (!scan.advance()) pendingScans.removeFirst()
+        }
+    }
+
+    private fun scanBlock(scan: ChunkScan) {
+        val pos = BlockPos(scan.chunk.pos.minBlockX + scan.x, scan.y, scan.chunk.pos.minBlockZ + scan.z)
+
+        if (scan.scanStructures) Structure.entries.forEach { structure ->
+            if (!structure.quarter.test(pos)) return@forEach
+
+            val existing = foundStructures[structure]
+            if (structure.canBeMultiple) {
+                if (existing?.any { it.isWithinChunks(pos, 4) } == true) return@forEach
+            } else if (existing != null) {
+                return@forEach
+            }
+
+            if (scanStructure(scan, structure)) {
+                val realPos = pos.offset(structure.xOffset, structure.yOffset, structure.zOffset)
+                foundStructures.getOrPut(structure) { mutableListOf() }.add(realPos)
+                ChatUtils.modMessage("Found ${structure.displayName} at ${pos.x}, ${pos.y}, ${pos.z}")
+            }
+        }
+
+        if (scan.scanRoutes && scan.y <= ROUTE_MAX_Y) {
+            if (scan.chunk.getBlockState(pos).block != Blocks.COBBLESTONE) return
+            val valid = Direction.entries.asSequence().filter { it != Direction.DOWN }.all {
+                val state = scan.world.getBlockState(pos.relative(it))
+                state.isAir || state.block.registryName.contains("glass")
+            }
+
+            if (valid && foundRouteBlockKeys.add(pos.asLong())) {
+                foundRouteBlocks.add(pos)
             }
         }
     }
 
-    private fun scanStructure(chunk: LevelChunk, structure: Structure, x: Int, startY: Int, z: Int): Boolean {
-        if (startY + structure.blocks.size >= 180) return false
+    private fun scanStructure(scan: ChunkScan, structure: Structure): Boolean {
+        val lastY = scan.y + structure.blocks.lastIndex
+        if (lastY > minOf(STRUCTURE_MAX_Y, scan.world.maxY - 1)) return false
 
         structure.blocks.forEachIndexed { i, block ->
             if (block == null) return@forEachIndexed
 
-            val checkY = startY + i
-
-            val pos = BlockPos(chunk.pos.minBlockX + x, checkY, chunk.pos.minBlockZ + z)
-
-            val state = chunk.getBlockState(pos)
+            val pos = BlockPos(
+                scan.chunk.pos.minBlockX + scan.x,
+                scan.y + i,
+                scan.chunk.pos.minBlockZ + scan.z,
+            )
+            val state = scan.chunk.getBlockState(pos)
 
             if (state.block != block) {
                 return false
             }
         }
         return true
+    }
+
+    private fun resetScanner(world: ClientLevel?) {
+        scanWorld = world
+        pendingScans.clear()
+        scannedChunks.clear()
+        foundStructures.clear()
+        foundRouteBlocks.clear()
+        foundRouteBlockKeys.clear()
+        isDirty = true
     }
 
     private fun BlockPos.isWithinChunks(other: BlockPos, chunks: Int): Boolean {

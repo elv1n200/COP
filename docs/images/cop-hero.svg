@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
+  <title id="title">COP — Minecraft 26.1.2 Fabric toolkit</title>
+  <desc id="desc">Abstract violet and cyan banner for COP with its supported platform and feature areas.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090b18"/>
+      <stop offset="0.52" stop-color="#17132e"/>
+      <stop offset="1" stop-color="#0b1c28"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="0.52" stop-color="#7c5cff"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <radialGradient id="glowViolet">
+      <stop offset="0" stop-color="#a855f7" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowCyan">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#c4b5fd" stroke-opacity=".055" stroke-width="1"/>
+    </pattern>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="360" rx="28" fill="url(#background)"/>
+  <rect width="1280" height="360" rx="28" fill="url(#grid)"/>
+  <circle cx="190" cy="78" r="240" fill="url(#glowViolet)"/>
+  <circle cx="1115" cy="300" r="290" fill="url(#glowCyan)"/>
+
+  <g transform="translate(88 61)">
+    <rect width="238" height="238" rx="58" fill="#0c1022" stroke="url(#accent)" stroke-width="3"/>
+    <path d="M157 71a72 72 0 1 0 0 96" fill="none" stroke="url(#accent)" stroke-width="24" stroke-linecap="round" filter="url(#softGlow)"/>
+    <path d="M151 83h25c31 0 49 15 49 42s-18 43-49 43h-25m27-85v114" fill="none" stroke="#e9e7ff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="42" cy="42" r="5" fill="#a855f7"/>
+    <circle cx="196" cy="199" r="5" fill="#22d3ee"/>
+  </g>
+
+  <g transform="translate(378 75)" font-family="Inter, Segoe UI, Arial, sans-serif">
+    <text x="0" y="90" fill="#f8fafc" font-size="92" font-weight="800" letter-spacing="8">COP</text>
+    <rect x="2" y="112" width="744" height="4" rx="2" fill="url(#accent)"/>
+    <text x="2" y="155" fill="#d7d4ef" font-size="22" font-weight="600" letter-spacing="3">SKYBLOCK TOOLKIT FOR FABRIC</text>
+    <text x="2" y="202" fill="#9ca3b8" font-size="17" font-weight="500" letter-spacing="2">DUNGEONS  ·  QOL  ·  RENDER  ·  MINING</text>
+  </g>
+
+  <g transform="translate(1025 44)" font-family="Inter, Segoe UI, Arial, sans-serif">
+    <rect width="183" height="45" rx="22.5" fill="#10243a" stroke="#22d3ee" stroke-opacity=".55"/>
+    <circle cx="24" cy="22.5" r="6" fill="#34d399"/>
+    <text x="41" y="28" fill="#c8f7ff" font-size="14" font-weight="700" letter-spacing="1">MC 26.1.2</text>
+  </g>
+
+  <path d="M991 142l74 43-74 43-74-43z" fill="none" stroke="#a855f7" stroke-opacity=".18" stroke-width="2"/>
+  <path d="M1065 185v86l-74 43v-86z" fill="#22d3ee" fill-opacity=".035" stroke="#22d3ee" stroke-opacity=".14"/>
+  <path d="M917 185v86l74 43v-86z" fill="#a855f7" fill-opacity=".035" stroke="#a855f7" stroke-opacity=".14"/>
+</svg>

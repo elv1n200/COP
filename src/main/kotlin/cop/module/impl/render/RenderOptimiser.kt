@@ -4,14 +4,14 @@ import net.fabricmc.fabric.api.client.screen.v1.Screens
 import net.minecraft.client.gui.components.ImageButton
 import net.minecraft.client.gui.screens.recipebook.RecipeBookComponent
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket
-import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket
 import net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket
 import net.minecraft.world.effect.MobEffects
-import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.EquipmentSlot
+import net.minecraft.world.entity.decoration.ArmorStand
 import cop.api.events.GuiEvent
 import cop.api.events.PacketEvent
+import cop.api.events.RenderEvent
 import cop.api.skyblock.dungeon.Dungeon
 import cop.module.Module
 import cop.utils.skyblock.ItemUtils.texture
@@ -40,32 +40,30 @@ object RenderOptimiser : Module(
 
 
     init {
-        on<PacketEvent.Received> {
-            if (mc.player == null) return@on
-            when(packet) {
-                is ClientboundAddEntityPacket -> {
-                    if (hideFallingBlocks && packet.type == EntityType.FALLING_BLOCK ||
-                        hideLightning && packet.type == EntityType.LIGHTNING_BOLT) cancel()
-                }
-                is ClientboundSetEquipmentPacket -> {
-                    if (!Dungeon.inDungeons) return@on
-                    packet.slots.forEach { slot ->
-                        if (slot.second.isEmpty) return@forEach
-                        val texture = slot.second.texture ?: return@forEach
+        on<PacketEvent.Received, ClientboundAddEntityPacket> {
+            if (hideFallingBlocks && packet.type == EntityType.FALLING_BLOCK ||
+                hideLightning && packet.type == EntityType.LIGHTNING_BOLT) cancel()
+        }
 
-                        if (
-                            (hideFairy && slot.first == EquipmentSlot.MAINHAND && texture == HEALER_FAIRY_TEXTURE) ||
-                            (hideWeaver && slot.first == EquipmentSlot.HEAD && texture == SOUL_WEAVER_TEXTURE)
-                        ) mc.execute { level.removeEntity(packet.entity, Entity.RemovalReason.DISCARDED) }
-                    }
-                }
+        on<PacketEvent.Received, ClientboundUpdateMobEffectPacket> {
+            val player = mc.player ?: return@on
+            if (hideBlindness && packet.entityId == player.id && packet.effect == MobEffects.BLINDNESS) cancel()
+        }
 
-                is ClientboundUpdateMobEffectPacket -> {
-                    if (hideBlindness &&
-                        packet.entityId == player.id &&
-                        packet.effect == MobEffects.BLINDNESS) cancel()
-                }
-
+        // Rendering is presentation state. Removing these armor stands from the
+        // client level used to make the setting irreversible until a respawn
+        // packet arrived and could desynchronise other modules. Inspect the
+        // fully-updated entity instead and suppress only its current frame.
+        on<RenderEvent.Entity> {
+            if (!hideFairy && !hideWeaver) return@on
+            if (!Dungeon.inDungeons) return@on
+            val stand = entity as? ArmorStand ?: return@on
+            if (hideFairy && stand.getItemBySlot(EquipmentSlot.MAINHAND).texture == HEALER_FAIRY_TEXTURE) {
+                cancel()
+                return@on
+            }
+            if (hideWeaver && stand.getItemBySlot(EquipmentSlot.HEAD).texture == SOUL_WEAVER_TEXTURE) {
+                cancel()
             }
         }
 

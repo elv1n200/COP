@@ -12,6 +12,8 @@
 $ErrorActionPreference = 'Continue'
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$MaxAlbumArtBytes = 5MB
+$MaxMetadataChars = 512
 
 # Force-load the WinRT types we need.
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime]
@@ -62,6 +64,19 @@ function Emit($obj) {
     }
 }
 
+function Test-SpotifySource($value) {
+    $source = "$value".Trim().ToLowerInvariant()
+    return $source -eq 'spotify' -or
+        $source -eq 'spotify.exe' -or
+        ($source.StartsWith('spotifyab.spotifymusic_') -and $source.EndsWith('!spotify'))
+}
+
+function Limit-Text($value, [int]$maxChars = $MaxMetadataChars) {
+    $text = "$value"
+    if ($text.Length -le $maxChars) { return $text }
+    return $text.Substring(0, $maxChars)
+}
+
 Emit @{ type = 'hello'; pid = $PID }
 
 # Acquire the session manager once.
@@ -86,18 +101,19 @@ while ($true) {
         foreach ($s in $sessions) {
             $src = ''
             try { $src = $s.SourceAppUserModelId } catch {}
-            if ($src -and $src.ToLowerInvariant().Contains('spotify')) {
+            if (Test-SpotifySource $src) {
                 $session = $s
                 break
             }
         }
-        # Fallback: if no Spotify-tagged session, use whatever the current session is
-        # (Spotify's AUMID can sometimes be empty during startup).
-        if ($null -eq $session) {
-            try { $session = $mgr.GetCurrentSession() } catch {}
-        }
 
         if ($null -eq $session) {
+            # Never expose metadata/art from whichever unrelated app happens to
+            # own the global current-media session. Wait for Spotify to publish
+            # an identifiable session instead.
+            $lastTitle = $null
+            $lastArtist = $null
+            $lastArtHash = ''
             Emit @{ type = 'state'; open = $false; paused = $false; title = ''; artist = ''; album = ''; posMs = 0; durMs = 0; source = ''; artVersion = $artVersion }
             Start-Sleep -Milliseconds 1000
             continue
@@ -105,13 +121,22 @@ while ($true) {
 
         $source = ''
         try { $source = $session.SourceAppUserModelId } catch {}
+        if (-not (Test-SpotifySource $source)) {
+            $lastTitle = $null
+            $lastArtist = $null
+            $lastArtHash = ''
+            Emit @{ type = 'state'; open = $false; paused = $false; title = ''; artist = ''; album = ''; posMs = 0; durMs = 0; source = ''; artVersion = $artVersion }
+            Start-Sleep -Milliseconds 1000
+            continue
+        }
+        $source = Limit-Text $source
 
         $propsOp = $session.TryGetMediaPropertiesAsync()
         $props = Await $propsOp ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
 
-        $title  = if ($props) { $props.Title }       else { '' }
-        $artist = if ($props) { $props.Artist }      else { '' }
-        $album  = if ($props) { $props.AlbumTitle }  else { '' }
+        $title  = Limit-Text $(if ($props) { $props.Title }      else { '' })
+        $artist = Limit-Text $(if ($props) { $props.Artist }     else { '' })
+        $album  = Limit-Text $(if ($props) { $props.AlbumTitle } else { '' })
 
         $timeline = $session.GetTimelineProperties()
         $playback = $session.GetPlaybackInfo()
@@ -125,10 +150,10 @@ while ($true) {
         # Album art: changes only when the track does, so we hash on title+artist as a cheap proxy
         # and re-fetch the thumbnail bytes only when that changes.
         $trackKey = "$title|$artist"
-        $artChanged = $false
         if ($trackKey -ne ($lastTitle + '|' + $lastArtist)) {
             $lastTitle = $title
             $lastArtist = $artist
+            $hasUsableArt = $false
 
             if ($props -and $props.Thumbnail) {
                 try {
@@ -140,30 +165,57 @@ while ($true) {
                         # `WindowsRuntimeStreamExtensions.AsStreamForRead`, invoked through the
                         # pre-resolved MethodInfo so the runtime QueryInterfaces the COM object
                         # to IRandomAccessStream itself.
-                        $netStream = $asStreamForRead.Invoke($null, @($stream))
-                        $ms = New-Object System.IO.MemoryStream
-                        $netStream.CopyTo($ms)
-                        $bytes = $ms.ToArray()
-                        $netStream.Dispose()
-                        $ms.Dispose()
+                        $netStream = $null
+                        $ms = $null
+                        try {
+                            $netStream = $asStreamForRead.Invoke($null, @($stream))
+                            $ms = New-Object System.IO.MemoryStream
+                            $buffer = New-Object byte[] 81920
+                            $total = 0
+                            while (($read = $netStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                                $total += $read
+                                if ($total -gt $MaxAlbumArtBytes) {
+                                    throw "album art exceeds $MaxAlbumArtBytes bytes"
+                                }
+                                $ms.Write($buffer, 0, $read)
+                            }
+                            $bytes = $ms.ToArray()
+                        } finally {
+                            if ($null -ne $netStream) { $netStream.Dispose() }
+                            if ($null -ne $ms) { $ms.Dispose() }
+                        }
 
                         if ($bytes.Length -gt 0) {
                             # Hash to detect actual content changes (different from track-key heuristic
                             # since some tracks share art, and live-updates can mutate it).
-                            $sha = [System.Security.Cryptography.SHA1]::Create()
-                            $hash = [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '')
-                            if ($hash -ne $lastArtHash) {
-                                $lastArtHash = $hash
-                                $artVersion++
-                                $b64 = [System.Convert]::ToBase64String($bytes)
-                                Emit @{ type = 'art'; version = $artVersion; b64 = $b64 }
-                                $artChanged = $true
+                            $sha = $null
+                            try {
+                                $sha = [System.Security.Cryptography.SHA1]::Create()
+                                $hash = [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '')
+                                if ($hash -ne $lastArtHash) {
+                                    $lastArtHash = $hash
+                                    $artVersion++
+                                    $b64 = [System.Convert]::ToBase64String($bytes)
+                                    Emit @{ type = 'art'; version = $artVersion; source = "$source"; b64 = $b64 }
+                                }
+                                $hasUsableArt = $true
+                            } finally {
+                                if ($null -ne $sha) { $sha.Dispose() }
                             }
                         }
                     }
                 } catch {
                     [Console]::Error.WriteLine("art fetch failed: $_")
                 }
+            }
+
+            # Explicitly retire the previous track's cover if this track has no
+            # usable thumbnail (including fetch/size failures). The versioned
+            # signal prevents the JVM renderer from continuing to show stale art.
+            if (-not $hasUsableArt) {
+                $lastArtHash = ''
+                $artVersion++
+                Emit @{ type = 'art-clear'; version = $artVersion; source = "$source" }
             }
         }
 
@@ -181,6 +233,9 @@ while ($true) {
         }
     } catch {
         [Console]::Error.WriteLine("loop error: $_")
+        $lastTitle = $null
+        $lastArtist = $null
+        $lastArtHash = ''
         Emit @{ type = 'state'; open = $false; paused = $false; title = ''; artist = ''; album = ''; posMs = 0; durMs = 0; source = ''; artVersion = $artVersion }
     }
 

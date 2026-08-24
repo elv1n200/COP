@@ -29,6 +29,10 @@ abstract class GuiEvent {
 
     abstract class Slot {
         class Click(val screen: Screen, val slot: net.minecraft.world.inventory.Slot, val slotId: Int, val button: Int, val actionType: ClickType) : CancellableEvent()
+        /** Separate event for a click outside the container (normally slot id
+         * -999). Keeping [Click.slot] non-null preserves the existing addon
+         * contract while allowing safety modules to protect the carried item. */
+        class OutsideClick(val screen: Screen, val slotId: Int, val button: Int, val actionType: ClickType) : CancellableEvent()
         class Draw(val screen: Screen, val ctx: GuiGraphics, val slot: net.minecraft.world.inventory.Slot) : CancellableEvent()
     }
 

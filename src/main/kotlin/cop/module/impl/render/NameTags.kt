@@ -45,15 +45,14 @@ object NameTags : Module(
             if (!shouldCancelTag) return@on
             val pos = player.renderPos
             playerEntitiesNoSelf.forEach { entity ->
-                val name = entity.displayName?.let { displayName ->
-                    when {
-                        inDungeons -> dungeonTeammatesNoSelf.firstOrNull { it.name == entity.name.string }
-                            ?.let { literal("&${it.clazz.colourCode}${it.name}") }
-                            ?: if (simpleTag) displayName.simple else displayName
-                        simpleTag -> displayName.simple
-                        else -> displayName
-                    }
-                } ?: return@forEach
+                val displayName = entity.displayName
+                val name = when {
+                    inDungeons -> dungeonTeammatesNoSelf.firstOrNull { it.name == entity.name.string }
+                        ?.let { literal("&${it.clazz.colourCode}${it.name}") }
+                        ?: if (simpleTag) displayName.simple else displayName
+                    simpleTag -> displayName.simple
+                    else -> displayName
+                }
                 val dist = pos.distanceToSqr(entity.renderX, entity.renderY, entity.renderZ)
                 if (distanceText) { // fixme
                     (name as MutableComponent)

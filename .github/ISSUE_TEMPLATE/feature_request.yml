@@ -1,39 +1,68 @@
-name: Feature request
-description: Ein Vorschlag für ein neues Feature oder eine Verbesserung.
+name: Feature Request
+description: Vorschlag für eine neue Funktion oder eine gezielte Verbesserung.
 title: "[Feature]: "
 labels: [enhancement]
 body:
-  - type: textarea
-    id: feature
+  - type: markdown
     attributes:
-      label: What feature?
-      description: Was soll der Mod können was er heute nicht kann?
+      value: |
+        Beschreibe zuerst Problem und Nutzen. Eine Feature-Anfrage ist noch keine Zusage zur Umsetzung.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Use Case
+      description: Welcher konkrete Ablauf ist heute umständlich oder nicht möglich?
+      placeholder: "Wenn ich …, muss ich aktuell …"
     validations:
       required: true
 
   - type: textarea
-    id: usecase
+    id: proposal
     attributes:
-      label: Use case
-      description: |
-        Wann wäre das nützlich? Welches Problem würde es lösen?
-        Konkrete Beispiele helfen ("wenn ich X mache, müsste ich
-        aktuell Y manuell tun, ich hätte gerne dass...").
+      label: Gewünschtes Verhalten
+      description: Wie sollte die Funktion aus Nutzersicht reagieren? Nenne UI, Defaults und Abbruchbedingungen.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Bereich
+      options:
+        - Dungeon / Solver / Overlay
+        - Auto Croesus / Preise
+        - ClickGUI / HUD
+        - Chat / Commands
+        - Render / Player
+        - Mining
+        - Integration / Netzwerk
+        - Addon-API
+        - Build / Dokumentation
+        - Andere / unklar
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Risiken und Serverregeln
+      description: Kann die Idee Eingaben automatisieren, Netzwerkdaten senden, Dateien verändern oder Serverregeln berühren? Wie lässt sie sich sicher begrenzen?
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
-      description: Hast du andere Lösungen erwogen? Andere Mods die das können?
+      label: Alternativen
+      description: Welche vorhandene COP-Funktion, andere Lösung oder kleinere Variante hast du geprüft?
 
-  - type: dropdown
-    id: scope
+  - type: checkboxes
+    id: confirmations
     attributes:
-      label: Scope
+      label: Bestätigung
       options:
-        - Neues Module
-        - Erweiterung eines bestehenden Moduls
-        - Kleine QoL / Polish
-        - Andere / unklar
+        - label: Der Vorschlag zielt auf den aktiven mc26-/Minecraft-26.1.2-Stand.
+          required: true
+        - label: Ich habe in bestehenden Issues nach ähnlichen Vorschlägen gesucht.
+          required: true

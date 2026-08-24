@@ -1,6 +1,10 @@
 package cop
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.rendering.v1.SpecialGuiElementRegistry
 import net.minecraft.client.Minecraft
@@ -14,14 +18,17 @@ import cop.config.Config
 import cop.module.ModuleManager
 import cop.utils.ui.hud.HudManager
 import cop.utils.ui.rendering.NVGSpecialRenderer
-import kotlin.coroutines.EmptyCoroutineContext
 
 object CopMod : ClientModInitializer {
 
     const val MOD_ID = "cop"
     val mc: Minecraft get() = Minecraft.getInstance()
-    val scope = CoroutineScope(EmptyCoroutineContext)
     val logger: Logger = LogManager.getLogger("cop")
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, throwable ->
+            logger.error("Unhandled COP coroutine failure", throwable)
+        },
+    )
 
     override fun onInitializeClient() {
         ModuleManager.initialise()
@@ -37,5 +44,6 @@ object CopMod : ClientModInitializer {
         }
         CopCommand.init()
         Config.load()
+        EventBus.on<GameEvent.Unload>(Int.MIN_VALUE) { scope.cancel() }
     }
 }

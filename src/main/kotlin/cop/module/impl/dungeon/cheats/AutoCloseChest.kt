@@ -30,9 +30,12 @@ object AutoCloseChest : Module(
         on<PacketEvent.Received, ClientboundOpenScreenPacket> {
             if (packet.type !in chestMenuTypes || packet.title.string.trim() !in secretChestTitles) return@on
 
-            SecretAura.lastClickedPos?.let { pos ->
-                SecretAura.blocksDone.add(pos.asLong())
-                SecretAura.lastClickedPos = null
+            mc.execute {
+                if (!enabled) return@execute
+                SecretAura.lastClickedPos?.let { pos ->
+                    SecretAura.blocksDone.add(pos.asLong())
+                    SecretAura.lastClickedPos = null
+                }
             }
 
             mc.connection?.send(ServerboundContainerClosePacket(packet.containerId))

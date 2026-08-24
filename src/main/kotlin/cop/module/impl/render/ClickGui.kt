@@ -127,11 +127,14 @@ object ClickGui : Module(
         )
     }.setting()
 
-    private val categoryData by MapSetting("category data", mutableMapOf<Category, CategoryData>()).also { setting ->
-        Category.entries.forEach {
-            setting.value[it] = CategoryData(x = 10f + 265f * it.ordinal, y = 10f, extended = true)
+    private val categoryData by MapSetting(
+        "category data",
+        mutableMapOf<Category, CategoryData>().apply {
+            Category.entries.forEach {
+                this[it] = CategoryData(x = 10f + 265f * it.ordinal, y = 10f, extended = true)
+            }
         }
-    }
+    )
     
     private var currentPet by textInput("Current pet", "").hide() // just for cfg
 
@@ -154,7 +157,7 @@ object ClickGui : Module(
     var clickGui: AbobaUI.Instance = clickGui()
         private set
 
-    private fun clickGui() = aboba("Quoi! Click Gui") { // todo redesign
+    private fun clickGui() = aboba("COP · Module & HUD Configuration") {
         val moduleScopes = arrayListOf<Pair<Module, ElementScope<*>>>()
         ui.debug = Test.uiDebug
         onRemove {
@@ -191,7 +194,7 @@ object ClickGui : Module(
                     radius(tl = 6, tr = 6)
                 ) {
                     text(
-                        string = category.name.capitaliseFirst(),
+                        string = category.displayName,
                         size = 70.percent,
                         colour = theme.onSurface
                     )
@@ -223,7 +226,13 @@ object ClickGui : Module(
                         // Then each sub-group with its header.
                         grouped.entries
                             .filter { it.key != null }
-                            .sortedBy { it.value.firstOrNull()?.let { m -> modulesFor(category).indexOf(m) } ?: 0 }
+                            .sortedWith(
+                                compareBy<Map.Entry<String?, List<Module>>> {
+                                    subCategoryOrder(category, it.key.orEmpty())
+                                }.thenBy {
+                                    it.value.firstOrNull()?.let { module -> modulesFor(category).indexOf(module) } ?: 0
+                                }
+                            )
                             .forEach { (sub, mods) ->
                                 subCategorySection(category, sub!!, mods, moduleScopes, data)
                             }
@@ -323,7 +332,7 @@ object ClickGui : Module(
         ) {
             tonalHover()
             text(
-                string = sub.replaceFirstChar { it.uppercase() },
+                string = subCategoryLabel(sub),
                 size = 13.px,
                 colour = theme.onSurface,
             )
@@ -543,5 +552,38 @@ object ClickGui : Module(
         Alphabetical(
             compareBy<Module> { it.name.lowercase() }
         );
+    }
+
+    /** Stable, user-facing grouping for the ClickGUI. Package names stay terse
+     *  for developers while the UI gets readable labels and a deliberate order. */
+    private fun subCategoryLabel(sub: String): String = when (sub.lowercase()) {
+        "worldrender" -> "World, Map & ESP"
+        "huds" -> "HUD & Timers"
+        "solvers" -> "Puzzle Solvers"
+        "qol" -> "Quality of Life"
+        "cheats" -> "Cheats & Automation"
+        "automation" -> "General Automation"
+        "combat" -> "Combat"
+        "slayer" -> "Slayer Automation"
+        "dojo" -> "Dojo Automation"
+        "economy" -> "Economy Automation"
+        "events" -> "Event Automation"
+        "movement" -> "Movement"
+        "navigation" -> "Navigation"
+        "riftsolvers" -> "Rift Solvers"
+        else -> sub.replace(Regex("([a-z])([A-Z])"), "$1 $2")
+            .replaceFirstChar { it.uppercase() }
+    }
+
+    private fun subCategoryOrder(category: Category, sub: String): Int {
+        val order = when (category) {
+            Category.DUNGEON -> listOf("worldrender", "huds", "solvers", "qol", "cheats")
+            Category.RENDER -> listOf("world", "hud", "effects")
+            Category.PLAYER -> listOf("movement", "combat", "cheats", "automation")
+            Category.MISC -> listOf("automation", "economy", "slayer", "dojo", "events", "riftsolvers")
+            Category.MINING -> listOf("navigation", "qol", "cheats", "automation")
+            Category.ADDON -> emptyList()
+        }
+        return order.indexOf(sub.lowercase()).takeIf { it >= 0 } ?: Int.MAX_VALUE
     }
 }

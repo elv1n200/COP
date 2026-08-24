@@ -63,7 +63,10 @@ public class AbstractContainerScreenMixin {
             cancellable = true
     )
     public void cop$onMouseClickedSlot(Slot slot, int slotId, int button, ClickType actionType, CallbackInfo ci) {
-        if (slot == null) return;
+        if (slot == null) {
+            if (new GuiEvent.Slot.OutsideClick((Screen) (Object) this, slotId, button, actionType).post()) ci.cancel();
+            return;
+        }
         if (new GuiEvent.Slot.Click((Screen) (Object) this, slot, slotId, button, actionType).post()) ci.cancel();
     }
 

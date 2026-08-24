@@ -82,7 +82,7 @@ object ServerInfo {
             if (packet is ServerboundPingRequestPacket) lastBeat = System.currentTimeMillis()
         }
 
-        EventBus.on<PacketEvent.Received> {
+        EventBus.on<PacketEvent.ReceivedClient> {
             if (packet is ClientboundPongResponsePacket) {
                 val t = System.currentTimeMillis()
                 val a = (System.nanoTime() - packet.time) * 1e-6

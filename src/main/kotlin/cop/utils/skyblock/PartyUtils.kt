@@ -53,7 +53,7 @@ object PartyUtils {
         private set
 
     init {
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             joinedOther.find(message)?.let { return@on addMember(it.groupValues[2]) }
 
             joinedSelf.find(message)?.let {
@@ -123,9 +123,8 @@ object PartyUtils {
                     val memberMatch = memberFormat.find(segment.trim()) ?: return@forEach
                     addMember(memberMatch.groupValues[2])
                     if (type == "Leader") partyLeader = memberMatch.groupValues[2]
-
-                    return@on
                 }
+                return@on
             }
 
             partyWith.find(message)?.let { match ->

@@ -1,9 +1,14 @@
 package cop.module.impl.misc
 
+import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonDeserializer
 import com.google.gson.JsonPrimitive
+import com.google.gson.annotations.SerializedName
 import cop.CopMod
 import cop.api.events.ServerEvent
 import cop.api.input.CatKeys
+import cop.api.skyblock.Location
 import cop.module.Module
 import cop.utils.ChatUtils
 import cop.utils.ChatUtils.modMessage
@@ -46,6 +51,9 @@ object AutoUpdater : Module(
     "Auto Updater",
     desc = "Checks GitHub for new COP releases and (optionally) installs them on the next restart.",
 ) {
+    private const val UPDATE_OWNER = "elv1n200"
+    private const val UPDATE_REPOSITORY = "COP"
+
     // ---------------------------------------------------------------- settings
     private val checkOnLaunch by switch(
         "Check on launch", true,
@@ -66,14 +74,6 @@ object AutoUpdater : Module(
     private val includePrereleases by switch(
         "Include pre-releases", false,
         desc = "Use the `pre` stream — pulls in beta tags as well as stable releases.",
-    )
-    private val owner by textInput(
-        "GitHub owner", "elv1n200",
-        desc = "First half of `<owner>/<repo>` on github.com.", length = 39,
-    )
-    private val repo by textInput(
-        "GitHub repository", "COP",
-        desc = "Second half of `<owner>/<repo>` on github.com.", length = 100,
     )
     private val checkKey = keybind(
         "Check now", CatKeys.KEY_NONE,
@@ -124,7 +124,7 @@ object AutoUpdater : Module(
      */
     private val context: UpdateContext by lazy {
         UpdateContext(
-            McAwareGithubReleaseSource(owner, repo, currentMcVersion),
+            McAwareGithubReleaseSource(UPDATE_OWNER, UPDATE_REPOSITORY, currentMcVersion),
             UpdateTarget.deleteAndSaveInTheSameFolder(CopMod::class.java),
             // Strip leading 'v' so the local tag compares apples-to-apples
             // with GitHub's tag-name (some releases are tagged '1.2.0',
@@ -157,7 +157,7 @@ object AutoUpdater : Module(
         on<ServerEvent.Connect> {
             if (autoCheckFiredThisSession) return@on
             if (!checkOnLaunch) return@on
-            if (!ip.contains("hypixel", ignoreCase = true)) return@on
+            if (!Location.isHypixelAddress(ip)) return@on
             autoCheckFiredThisSession = true
             runCheck(reason = "hypixel-join")
         }
@@ -315,15 +315,54 @@ object AutoUpdater : Module(
         repository: String,
         private val mcVersion: String,
     ) : GithubReleaseUpdateSource(owner, repository) {
-        private val mcTag = "mc$mcVersion"
+        private class DigestAwareDownload : GithubRelease.Download() {
+            @SerializedName("digest")
+            var digest: String? = null
+        }
+
+        private val plainGson = Gson()
+        private val digestAwareGson = GsonBuilder()
+            .registerTypeAdapter(
+                GithubRelease.Download::class.java,
+                JsonDeserializer<GithubRelease.Download> { json, _, _ ->
+                    plainGson.fromJson(json, DigestAwareDownload::class.java)
+                },
+            )
+            .create()
+        private val digestPattern = Regex("^sha256:([0-9a-fA-F]{64})$")
+        private val assetNamePattern = Regex(
+            "^cop-.+\\+mc${Regex.escape(mcVersion)}\\.jar$",
+            RegexOption.IGNORE_CASE,
+        )
+
+        override fun getGson(): Gson = digestAwareGson
 
         override fun findAsset(release: GithubRelease): UpdateData? {
             val assets = release.assets ?: return null
-            val match = assets.firstOrNull { a ->
-                a.browserDownloadUrl != null
-                    && a.name?.endsWith(".jar") == true
-                    && a.name.contains(mcTag, ignoreCase = true)
-            } ?: return super.findAsset(release)  // fall back to "first jar" if no MC-specific build
+            val matches = assets.filter { asset ->
+                val downloadUrl = asset.browserDownloadUrl ?: return@filter false
+                val uri = runCatching { URI.create(downloadUrl) }.getOrNull() ?: return@filter false
+                asset.name?.matches(assetNamePattern) == true &&
+                    uri.scheme.equals("https", ignoreCase = true) &&
+                    uri.host.equals("github.com", ignoreCase = true) &&
+                    uri.path.startsWith("/$UPDATE_OWNER/$UPDATE_REPOSITORY/releases/download/")
+            }
+            if (matches.size != 1) {
+                CopMod.logger.warn(
+                    "[AutoUpdater] expected exactly one mc$mcVersion asset, found ${matches.size}; refusing update",
+                )
+                return null
+            }
+            val match = matches.single()
+            val sha256 = (match as? DigestAwareDownload)
+                ?.digest
+                ?.let { digestPattern.matchEntire(it)?.groupValues?.get(1) }
+            if (sha256 == null) {
+                CopMod.logger.warn(
+                    "[AutoUpdater] mc$mcVersion asset has no valid SHA-256 digest; refusing update",
+                )
+                return null
+            }
 
             return GithubReleaseUpdateData(
                 release.name ?: release.tagName,
@@ -331,7 +370,7 @@ object AutoUpdater : Module(
                 // compares equal to the local mod_version '1.3.0'. Mirror
                 // of the strip in AutoUpdater.context.
                 JsonPrimitive(release.tagName.removePrefix("v")),
-                null,
+                sha256,
                 match.browserDownloadUrl,
                 release.body,
                 release.targetCommitish,

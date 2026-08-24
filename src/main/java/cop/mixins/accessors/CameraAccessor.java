@@ -4,12 +4,12 @@ import net.minecraft.client.Camera;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
+import org.spongepowered.asm.mixin.gen.Invoker;
 
 /**
  * `Camera.position` was a public field through 1.21.10 but became private in
- * 1.21.11 and Mojang did *not* add a `getPosition()` getter — code accessing
- * the camera position from outside has to go through a mixin accessor on both
- * versions, so we route everything through this interface for source parity.
+ * newer versions. 26.1.2 exposes `position()`, while the shared older sources
+ * still use this accessor; keeping the access here preserves source parity.
  *
  * @author elvin
  */
@@ -17,4 +17,8 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface CameraAccessor {
     @Accessor("position")
     Vec3 getPosition();
+
+    /** Uses Camera's own lifecycle method so its cached block position stays in sync. */
+    @Invoker("setPosition")
+    void cop$invokeSetPosition(Vec3 position);
 }

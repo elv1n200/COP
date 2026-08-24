@@ -15,9 +15,15 @@ import cop.module.impl.dungeon.qol.*
 import cop.module.impl.dungeon.solvers.*
 import cop.module.impl.dungeon.worldrender.*
 import cop.module.impl.mining.*
+import cop.module.impl.mining.cheats.*
 import cop.module.impl.misc.*
+import cop.module.impl.misc.automation.*
+import cop.module.impl.misc.dojo.*
+import cop.module.impl.misc.economy.*
 import cop.module.impl.misc.riftsolvers.MirrorverseSolvers
+import cop.module.impl.misc.slayer.*
 import cop.module.impl.player.*
+import cop.module.impl.player.cheats.*
 import cop.module.impl.render.*
 import cop.module.settings.impl.KeybindComponent
 
@@ -48,6 +54,10 @@ object ModuleManager {
             TickTimers,
             InvincibilityTimer,
             CooldownDisplay,
+            DungeonScoreHud,
+            BlessingHud,
+            WarpCooldown,
+            RoomAlerts,
             M3FFDisplay,
             F7BossTitles,
             M7Relics,
@@ -64,6 +74,9 @@ object ModuleManager {
 
             // --- QoL / mild automation --------------------------------
             LeapMenu,
+            ArchitectDraft,
+            AutoRequeue,
+            AutoDungeonPotion,
             AutoLeap,
             AutoCloseChest,
             CancelInteract,
@@ -76,6 +89,13 @@ object ModuleManager {
             // --- Macros / heavy automation ("cheaty" stuff) -----------
             TerminalAura,
             AutoTerms,
+            DungeonAbilities,
+            AutoDoorOpener,
+            AutoWitherCloak,
+            BarrierBoom,
+            AutoInvincibility,
+            DebuffHelper,
+            AutoI4,
             SecretTriggerBot,
             SecretAura,
             DungeonBreaker,
@@ -97,6 +117,25 @@ object ModuleManager {
             AutoClicker,
             AutoAnvilBookCombine,
             Inventory,
+            ItemProtection,
+
+            // --- General SkyBlock automation -------------------------
+            AutoCarnival,
+            AutoJoinSkyBlock,
+            AutoHotbar,
+            AutoLoadout,
+            AutoWardrobe,
+            PartyAutoKick,
+
+            // --- Economy automation ---------------------------------
+            ChocolateFactory,
+            AutoSell,
+            EscrowFix,
+
+            // --- Combat / activity automation ------------------------
+            BlazeSlayerAutomation,
+            DojoAutomation,
+
             // CustomTriggers — WIP, not yet shipped. Keep registered in
             // source (cop.module.impl.misc.CustomTriggers + the matching
             // cop.api.customtriggers package) so we can flip it on without
@@ -118,6 +157,8 @@ object ModuleManager {
             EtherwarpHelper,
             FishingHelper,
             AutoSoulcry,
+            NoRotate,
+            DefensiveBlink,
 
             // RENDER
             NameTags,
@@ -129,11 +170,15 @@ object ModuleManager {
             CustomMageBeam,
             ArrowHitboxes,
             GameTint,
+            ChatWaypoints,
 
             // MINING
             CrystalHollowsMap,
             CrystalHollowsScanner,
             GrieferTracker,
+            CommissionDisplay,
+            MiningAbilityAlert,
+            NoBreakReset,
         )
 
         // Let third-party addons contribute modules AFTER the built-ins are in
@@ -159,7 +204,19 @@ object ModuleManager {
     /** Registrar handed to each addon — appends its modules to [modules]. */
     private val addonRegistrar = object : CopAddonRegistrar {
         override fun register(vararg modules: Module) {
-            ModuleManager.modules += modules
+            modules.forEach { candidate ->
+                val collision = ModuleManager.modules.firstOrNull {
+                    it.name.equals(candidate.name, ignoreCase = true)
+                }
+                if (collision != null) {
+                    logger.warn(
+                        "Skipping COP addon module '${candidate.name}': " +
+                            "the name is already used by '${collision.name}'",
+                    )
+                } else {
+                    ModuleManager.modules += candidate
+                }
+            }
         }
     }
 

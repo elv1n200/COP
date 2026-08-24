@@ -1,7 +1,6 @@
 package cop.mixins;
 
 import cop.api.events.core.EventBus;
-import cop.api.events.PacketEvent;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import net.minecraft.network.Connection;
@@ -24,11 +23,10 @@ public abstract class ConnectionMixin {
 
     @Inject(
             method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;)V",
-            at = @At("TAIL"),
-            cancellable = true
+            at = @At("TAIL")
     )
     private void cop$receivePacketPost(ChannelHandlerContext context, Packet<?> packet, CallbackInfo ci) {
-        if (new PacketEvent.ReceivedPost(packet).post()) ci.cancel();
+        EventBus.onPacketReceivedPost(packet);
     }
 
     @Inject(

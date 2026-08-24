@@ -36,9 +36,9 @@ import net.minecraft.world.entity.Entity
  *    to the next-best chest in the same run (requires Dungeon Chest Keys; one
  *    key consumed per additional chest beyond the first).
  *  - **Phase 3c:** [multiRun] — keybind in the Croesus list → walks through
- *    every unclaimed run on the current page, claims the best chest in each,
- *    backs out, repeats. Pair with [chainClaim] for full hands-free claim of
- *    every chest above threshold across every run (key-using players).
+ *    every unclaimed run across the paginated listing, claims the best chest
+ *    in each, backs out, and repeats. Page turns are bounded by a safety cap.
+ *    Pair with [chainClaim] for every qualifying chest across every run.
  *  - **Phase 4:** [useKismet] — when entering a buy-confirm whose profit is
  *    below [rerollThreshold], consumes a Kismet Feather from inventory to
  *    reroll once. After the reroll, buys if the new profit is at or above
@@ -53,7 +53,8 @@ import net.minecraft.world.entity.Entity
  *        profit (managed via `/cop worthless`). Useful for HPB, Fuming, etc.
  *        when you've already capped out.
  *
- * No pagination yet — saved for 3d. Master kill switch [autoClaim] defaults
+ * Pagination follows the standard slot-53 "Next Page" control and is capped
+ * at [MAX_PAGES_PER_CYCLE] page turns. Master kill switch [autoClaim] defaults
  * OFF so the keybind is inert until the user explicitly opts in.
  */
 object AutoCroesus : Module(
@@ -122,9 +123,9 @@ object AutoCroesus : Module(
     private val multiRun by switch(
         "Multi-run claim", false,
         desc = "Full multi-run automation. Press the claim key while in the Croesus list to " +
-            "walk through every unclaimed run on the current page: open it, claim the best chest, " +
-            "back out, repeat. Stops when no unclaimed runs remain visible. Pair with Chain claim " +
-            "to also claim multiple chests per run (requires Dungeon Chest Keys in inventory)."
+            "walk through unclaimed runs across the paginated listing: open one, claim the best " +
+            "chest, back out, and repeat. Page turns have a safety cap. Pair with Chain claim to " +
+            "also claim multiple chests per run (requires Dungeon Chest Keys in inventory)."
     )
     private val multiRunPacing by slider(
         "Multi-run pacing", 6, 3, 20, 1,
@@ -193,9 +194,8 @@ object AutoCroesus : Module(
      *  Stored in the loot log so summaries can break down by floor / mode. */
     private var pendingFloor = ""
     /** Full [ChestInfo] captured from the run-sub-screen parse at click time.
-     *  Used as a fallback for the loot log when the buy-confirm parse races
-     *  the slot-population packet (chest == null in decideBuyOrReroll's buy
-     *  branch on the fast path). Reset on each new claim cycle. */
+     *  Used to verify that the populated buy-confirm belongs to the selected
+     *  tier. It is never used as a fallback authorisation to buy. */
     private var pendingChestInfo: ChestInfo? = null
     /** Synthetic id for the current run, bumped (= System.currentTimeMillis())
      *  every time the parser detects a new run-sub-screen container. Stamped
@@ -230,14 +230,13 @@ object AutoCroesus : Module(
      *  click. Same idea as croesusReadyAtTick — give Hypixel time to push the
      *  refreshed slot lore before we re-evaluate. */
     private var rerollReadyAtTick = 0L
+    private var preRerollLore: List<String>? = null
     private val REROLL_SYNC_DELAY_TICKS = 15L
 
-    /** Earliest tick at which we'll evaluate the buy-confirm in the kismet
-     *  path. handleConfirmOpen fires on GuiEvent.Open but slot 31's lore
+    /** Earliest tick at which we'll evaluate the buy-confirm.
+     *  handleConfirmOpen fires on GuiEvent.Open but slot 31's lore
      *  (Contents / Cost / items — what decideBuyOrReroll parses) isn't pushed
-     *  until a few ticks later. Without this delay the parse fails, chest=null,
-     *  the reroll branch's `chest != null` guard skips, and we fall through to
-     *  buy without rerolling — even with a kismet sitting in inv. */
+     *  until a few ticks later. */
     private var confirmReadyAtTick = 0L
     private val CONFIRM_SYNC_DELAY_TICKS = 10L
 
@@ -252,6 +251,8 @@ object AutoCroesus : Module(
      *  can mark it [exhaustedSlotsThisRun] and stop tryStartClaim from re-
      *  selecting the same slot on the next chain iteration. */
     private var pendingChestSlot = -1
+    /** True when the selected chest contains a user-configured always-buy item. */
+    private var pendingAlwaysBuy = false
     /** Run-sub-screen slots we've already tried to claim in this run — either
      *  rerolled without recovering profit, or otherwise backed out of. Filters
      *  out of tryStartClaim's best-chest selection so we don't loop on the
@@ -329,12 +330,10 @@ object AutoCroesus : Module(
             // opens are instant (cached for 30 min).
             PriceClient.refreshIfStale()
 
-            // Kismet poller (first-pass): handleConfirmOpen deferred the
-            // decision because slot 31's lore isn't populated yet when the
-            // Open event fires. Wait CONFIRM_SYNC_DELAY_TICKS AND require
-            // the lore to contain "Cost" (= Hypixel finished pushing) before
-            // running decideBuyOrReroll.
-            if (claimState == ClaimState.AWAIT_CONFIRM && useKismet &&
+            // Buy-confirm poller: always wait for slot 31 to be populated.
+            // Hypixel sends its contents after the GUI-open packet, so no path
+            // may treat an early parser failure as permission to buy blindly.
+            if (claimState == ClaimState.AWAIT_CONFIRM &&
                 CroesusParser.inBuyConfirmMenu(screen) &&
                 monotonicTick >= confirmReadyAtTick) {
                 val lore = CroesusParser.lorePlain(screen.menu, CroesusParser.BUY_CONFIRM_SLOT)
@@ -351,7 +350,13 @@ object AutoCroesus : Module(
             if (claimState == ClaimState.AWAIT_REROLL_RESULT &&
                 CroesusParser.inBuyConfirmMenu(screen) &&
                 monotonicTick >= rerollReadyAtTick) {
-                decideBuyOrReroll(screen)
+                val refreshedLore = CroesusParser.lorePlain(
+                    screen.menu,
+                    CroesusParser.BUY_CONFIRM_SLOT,
+                )
+                val ready = refreshedLore?.any { it.trim() == "Cost" } == true &&
+                    refreshedLore != preRerollLore
+                if (ready) decideBuyOrReroll(screen)
             }
 
             // Multi-run polling: in AWAIT_CROESUS_LIST, wait for the menu to
@@ -495,14 +500,9 @@ object AutoCroesus : Module(
 
     /** Step 2 of a claim cycle: the buy-confirm just opened.
      *
-     *  Fast path (useKismet off): no decision to make — slot 31's lore isn't
-     *  needed, we just want to click slot 31 by index. Handing straight to
-     *  decideBuyOrReroll skips the reroll branch and clicks buy.
-     *
-     *  Kismet path: defer until the TickEvent poller sees slot 31 populated.
-     *  Hypixel pushes slot data asynchronously after the open packet, so
-     *  parsing here would read empty lore, fail, and silently fall through
-     *  to buy (bug observed on real data — the kismet was never used). */
+     *  Defer every purchase until the TickEvent poller sees slot 31 populated,
+     *  then require a successful parse whose chest tier matches the selection
+     *  made on the preceding run screen. */
     private fun handleConfirmOpen(screen: net.minecraft.client.gui.screens.Screen) {
         if (!CroesusParser.inBuyConfirmMenu(screen)) {
             val title = (screen as? AbstractContainerScreen<*>)?.title?.string ?: "?"
@@ -510,13 +510,8 @@ object AutoCroesus : Module(
             resetCycle()
             return
         }
-        if (!useKismet) {
-            decideBuyOrReroll(screen as AbstractContainerScreen<*>)
-            return
-        }
-        // Kismet armed: TickEvent will fire decideBuyOrReroll once the
-        // CONFIRM_SYNC_DELAY_TICKS deadline has passed AND slot 31's lore
-        // contains a "Cost" line (i.e. Hypixel finished pushing it).
+        // TickEvent fires decideBuyOrReroll after the sync delay and only once
+        // slot 31 contains a Cost line (Hypixel finished pushing its data).
         confirmReadyAtTick = monotonicTick + CONFIRM_SYNC_DELAY_TICKS
     }
 
@@ -530,11 +525,30 @@ object AutoCroesus : Module(
         val title = screen.title.string.trim()
         val parsed = CroesusParser.parseBuyConfirmChest(screen.menu, title)
         val chest = (parsed as? ChestParseResult.Success)?.chest
+        val expectedChest = pendingChestInfo
+        if (chest == null || expectedChest == null) {
+            val reason = (parsed as? ChestParseResult.Failure)?.reason ?: "no chest data"
+            modMessage("&cAutoCroesus: buy-confirm could not be verified ($reason); refusing to buy.")
+            resetCycle()
+            return
+        }
+        if (!chest.tierName.equals(expectedChest.tierName, ignoreCase = true)) {
+            modMessage(
+                "&cAutoCroesus: buy-confirm tier mismatch " +
+                    "(expected ${expectedChest.tierName}, got ${chest.tierName}); refusing to buy.",
+            )
+            resetCycle()
+            return
+        }
 
         // First branch: try a reroll if the user has it armed and we haven't
         // already burned a feather on this chest.
-        if (chest != null && useKismet && !hasRerolledThisChest &&
+        if (!pendingAlwaysBuy && useKismet && !hasRerolledThisChest &&
             chest.profit < rerollThreshold && hasKismetFeather()) {
+            preRerollLore = CroesusParser.lorePlain(
+                screen.menu,
+                CroesusParser.BUY_CONFIRM_SLOT,
+            )?.toList()
             if (!ContainerUtils.click(CroesusParser.BUY_REROLL_SLOT)) {
                 modMessage("&cAutoCroesus: kismet click failed (no container id).")
                 resetCycle()
@@ -561,7 +575,7 @@ object AutoCroesus : Module(
         //       (rare race), so we entered but can't actually upgrade.
         // Either way, mark the slot exhausted so the next chain iteration
         // doesn't re-pick it.
-        if (chest != null && chest.profit < minProfit) {
+        if (!pendingAlwaysBuy && chest.profit < minProfit) {
             if (!ContainerUtils.click(CroesusParser.BUY_BACK_SLOT)) {
                 modMessage("&cAutoCroesus: back-out click failed.")
                 resetCycle()
@@ -602,17 +616,15 @@ object AutoCroesus : Module(
         // (fast path: slot 31 hasn't populated yet, but the snapshot is
         // equivalent because the chest's contents are determined server-side
         // before either screen renders).
-        val chestForLog = chest ?: pendingChestInfo
-        if (chestForLog != null) {
-            CroesusLootLog.append(CroesusLootLog.LootEntry(
+        CroesusLootLog.append(CroesusLootLog.LootEntry(
                 timestamp = System.currentTimeMillis(),
                 floor = pendingFloor,
-                tier = chestForLog.tierName,
-                cost = chestForLog.cost,
-                totalValue = chestForLog.totalValue,
-                profit = chestForLog.profit,
+                tier = chest.tierName,
+                cost = chest.cost,
+                totalValue = chest.totalValue,
+                profit = chest.profit,
                 kismet = hasRerolledThisChest,
-                items = chestForLog.items.map { item ->
+                items = chest.items.map { item ->
                     CroesusLootLog.LootItem(
                         // Strip the legacy "§5§o" italic prefix Hypixel
                         // attaches to every lore line — looks bad in summaries.
@@ -624,7 +636,6 @@ object AutoCroesus : Module(
                 },
                 runId = currentRunId.takeIf { it != 0L },
             ))
-        }
         modMessage("&a✓ AutoCroesus: bought &r$pendingTier&a chest.")
         // Pick the next state. Order matters: multi-run is the broadest mode
         // and prefers to land in AWAIT_AFTER_BUY so the next-screen handler
@@ -753,8 +764,10 @@ object AutoCroesus : Module(
         croesusReadyAtTick = 0L
         hasRerolledThisChest = false
         rerollReadyAtTick = 0L
+        preRerollLore = null
         confirmReadyAtTick = 0L
         pendingChestSlot = -1
+        pendingAlwaysBuy = false
         pendingChestInfo = null
         exhaustedSlotsThisRun.clear()
         pagesVisitedThisCycle = 0
@@ -919,11 +932,12 @@ object AutoCroesus : Module(
         // Speculative-enter for kismet: if profit is below minProfit BUT we
         // have a kismet armed and the chest is also below rerollThreshold,
         // enter anyway to try the reroll.
-        val canKismetUpgrade = useKismet && hasKismetFeather() && best.profit < rerollThreshold
+        val canKismetUpgrade = !isAlwaysBuyChest && useKismet &&
+            hasKismetFeather() && best.profit < rerollThreshold
         // Phase 6: always-buy chests bypass the profit gate entirely — the
-        // user said "claim this no matter what". They still respect kismet
-        // (we still try to upgrade the chest if useKismet is on) but the
-        // claim itself isn't blocked by minProfit.
+        // user said "claim this no matter what". They also skip the kismet
+        // branch in decideBuyOrReroll: an explicit always-buy request should
+        // claim immediately instead of gambling the selected contents away.
         val canEnterBuyConfirm = isAlwaysBuyChest || best.profit >= minProfit || canKismetUpgrade
         if (!canEnterBuyConfirm) {
             if (fromChain) {
@@ -963,15 +977,14 @@ object AutoCroesus : Module(
         claimState = ClaimState.AWAIT_CONFIRM
         // Each new chest gets a fresh reroll opportunity.
         hasRerolledThisChest = false
+        preRerollLore = null
         pendingChestSlot = best.slot
+        pendingAlwaysBuy = isAlwaysBuyChest
         claimDeadlineTick = monotonicTick + claimTimeoutTicks.toLong()
         pendingTier = "${best.tierColourCode}${best.tierName}"
         pendingFloor = screen.title.string.trim()
-        // Snapshot for the loot log — the buy branch in decideBuyOrReroll
-        // may fire before slot 31's lore has populated (non-kismet fast
-        // path), in which case the buy-confirm parse returns null. The
-        // run-sub-screen data we just used to pick this chest is the same
-        // data the buy-confirm would parse, so it's a safe fallback.
+        // Snapshot of the selected tier. The confirm screen must parse and
+        // match this tier before any buy/reroll click is allowed.
         pendingChestInfo = best
         val msg = when {
             // Always-buy chests get their own colour so the user knows we

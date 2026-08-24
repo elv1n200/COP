@@ -1,6 +1,6 @@
 package cop.module.impl.misc
 
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.network.chat.HoverEvent
@@ -55,6 +55,7 @@ object PetKeybinds : Module(
     val petMap by MapSetting("PetKeys map", mutableMapOf<String, String>())
 
     private var petsCache = emptyList<ItemStack>()
+    private val clientDispatcher by lazy { mc.asCoroutineDispatcher() }
 
     const val LIST_ID = 67
     const val GET_ID = 69
@@ -83,7 +84,7 @@ object PetKeybinds : Module(
         }.description("Shows the pet list.")
 
         petCommand.sub("get") {
-            scope.launch(Dispatchers.IO) {
+            scope.launch(clientDispatcher) {
                 petsCache = getPets()
                 if (petsCache.isEmpty()) return@launch
                 modMessage(petsCache.asPet().toClickable("get"), GET_ID)
@@ -168,7 +169,7 @@ object PetKeybinds : Module(
         get() = this.noControlCodes.replace(Regex("""⭐?\s*\[Lvl \d+] """), "").trim('[', ']')
 
     private fun onClick(screen: AbstractContainerScreen<*>, keyCode: Int): Boolean {
-        val (current, total) = petsRegex.find(screen.title?.string ?: "")?.destructured?.let {
+        val (current, total) = petsRegex.find(screen.title.string)?.destructured?.let {
             (it.component1().toIntOrNull() ?: 1) to (it.component2().toIntOrNull() ?: 1)
         } ?: return false
         var slot = when (keyCode) {
@@ -182,19 +183,19 @@ object PetKeybinds : Module(
 
             unequipKeybind.key ->
                 screen.menu.slots.subList(10, 43)
-                    .indexOfFirst { it.item?.loreString?.contains("Click to despawn!") == true }
+                    .indexOfFirst { it.item.loreString?.contains("Click to despawn!") == true }
                     .takeIf { it != -1 }?.plus(10) ?: return false.also { modMessage("§cCouldn't find equipped pet") }
 
             else -> {
                 val petIndex = petKeys.indexOfFirst { it.key == keyCode }.takeIf { it != -1 } ?: return false
                 petMap.entries.elementAtOrNull(petIndex)?.let { (uuid, _) ->
-                    screen.menu.slots.subList(10, 43).indexOfFirst { it?.item?.skyblockUuid == uuid }
+                    screen.menu.slots.subList(10, 43).indexOfFirst { it.item.skyblockUuid == uuid }
                 }?.takeIf { it != -1 }?.plus(10)
                     ?: return false//.also { modMessage("§cCouldn't find matching pet or there is no pet in that position.") }
             }
         }
 
-        if (screen.menu.slots[slot].item?.loreString?.contains("Click to despawn!") == true && unequipKeybind.key != keyCode) {
+        if (screen.menu.slots[slot].item.loreString?.contains("Click to despawn!") == true && unequipKeybind.key != keyCode) {
 //            modMessage("§cThat pet is already equipped!")
             if (closeIfAlreadyEquipped) slot = 49
             else if (noUnequip) return false

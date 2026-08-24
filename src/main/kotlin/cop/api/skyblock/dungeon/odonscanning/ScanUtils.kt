@@ -4,13 +4,11 @@ import com.google.common.reflect.TypeToken
 import com.google.gson.GsonBuilder
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
-import net.minecraft.network.protocol.game.ClientboundMapItemDataPacket
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.chunk.LevelChunk
 import cop.CopMod.logger
 import cop.CopMod.mc
 import cop.api.events.DungeonEvent
-import cop.api.events.PacketEvent
 import cop.api.events.TickEvent
 import cop.api.events.WorldEvent
 import cop.api.events.core.EventBus.on
@@ -23,9 +21,10 @@ import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomComponent
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomData
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomDataDeserializer
+import cop.api.skyblock.dungeon.odonscanning.tiles.RoomShape
+import cop.api.skyblock.dungeon.odonscanning.tiles.RoomState
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomType
 import cop.api.skyblock.dungeon.odonscanning.tiles.Rotations
-import cop.utils.ChatUtils.modMessage
 import cop.utils.Vec2i
 import cop.utils.WorldUtils.getBlockEntityList
 import cop.utils.WorldUtils.state
@@ -36,6 +35,7 @@ import kotlin.math.round
 // https://github.com/odtheking/Odin/blob/main/src/main/kotlin/com/odtheking/odin/utils/skyblock/dungeon/ScanUtils.kt
 object ScanUtils {
     private const val START = -185
+    private const val SCAN_INTERVAL_NANOS = 250_000_000L
 
     private val roomList: Set<RoomData> = loadRoomData()
     val coreToRoomData: Map<Int, RoomData> =
@@ -43,11 +43,10 @@ object ScanUtils {
 
     private val horizontals = Direction.entries.filter { it.axis.isHorizontal }
     private val mutableBlockPos = BlockPos.MutableBlockPos()
-    private var lastRoomPos: Vec2i = Vec2i(0, 0)
-    private var lastScanTime = 0L
+    private var lastRoomPos: Vec2i? = null
+    private var lastScanNanos = 0L
 
     val grid = Array<Any?>(121) { null }
-    private val uniqueRooms = mutableMapOf<String, OdonRoom>()
 
     var currentRoom: OdonRoom? = null
         private set
@@ -80,23 +79,28 @@ object ScanUtils {
                 return@on
             } // We want the current room to register as null if we are not in a dungeon
 
-            scanDungeon()
+            val scannedThisTick = scanDungeon()
 
-            scannedRooms.filter { it.rotation == Rotations.NONE }.forEach { room -> // suboptimal
-                val comp = room.roomComponents.firstOrNull() ?: return@forEach
-                val level = mc.level ?: return@forEach
+            if (scannedThisTick) {
+                scannedRooms.filter {
+                    it.rotation == Rotations.NONE &&
+                        it.roomComponents.size == it.data.shape.expectedTileCount
+                }.forEach { room ->
+                    val comp = room.roomComponents.firstOrNull() ?: return@forEach
+                    val level = mc.level ?: return@forEach
 
-                if (level.hasChunk(comp.x shr 4, comp.z shr 4)) {
-                    val chunk = level.getChunk(comp.x shr 4, comp.z shr 4)
-                    val height = getTopLayerOfRoom(Vec2i(comp.x, comp.z), chunk)
+                    if (level.hasChunk(comp.x shr 4, comp.z shr 4)) {
+                        val chunk = level.getChunk(comp.x shr 4, comp.z shr 4)
+                        val height = getTopLayerOfRoom(Vec2i(comp.x, comp.z), chunk)
 
-                    if (height > 0) {
-                        updateRotation(room, height)
+                        if (height > 0) {
+                            updateRotation(room, height)
+                        }
                     }
                 }
             }
 
-            if (mimicRoom == null && (Dungeon.floor?.floorNumber ?: -1) > 5) {
+            if (scannedThisTick && mimicRoom == null && (Dungeon.floor?.floorNumber ?: -1) > 5) {
                 scanMimic()
             }
 
@@ -108,25 +112,22 @@ object ScanUtils {
             val gx = (round((pX - START) / 32.0).toInt() * 2).coerceIn(0, 10)
             val gz = (round((pZ - START) / 32.0).toInt() * 2).coerceIn(0, 10)
 
-            if (gx == lastRoomPos.x && gz == lastRoomPos.z && !Location.currentArea.isArea(Island.SinglePlayer)) return@on
-            lastRoomPos = Vec2i(gx, gz)
+            val roomPos = Vec2i(gx, gz)
+            if (roomPos == lastRoomPos && room === currentRoom) return@on
+            lastRoomPos = roomPos
 
-            if (room != currentRoom) {
+            if (room !== currentRoom) {
                 DungeonEvent.Room.Enter(room).post()
             }
         }
 
         on<DungeonEvent.Room.Enter> {
             currentRoom = room
-            if (passedRooms.none { it.data.name == currentRoom?.data?.name }) passedRooms.add(currentRoom ?: return@on)
+            passedRooms.add(room ?: return@on)
         }
 
         on<DungeonEvent.Room.Scan> {
             MapRenderer.refresh()
-        }
-
-        on<PacketEvent.Received> {
-            if (packet is ClientboundMapItemDataPacket) mc.execute { MapRenderer.update(packet) }
         }
 
         on<WorldEvent.Chunk.Load> {
@@ -137,23 +138,24 @@ object ScanUtils {
             passedRooms.clear()
             scannedRooms.clear()
             scannedDoors.clear()
-            uniqueRooms.clear()
             grid.fill(null)
             currentRoom = null
             mimicRoom = null
-            lastRoomPos = Vec2i(0, 0)
+            lastRoomPos = null
+            lastScanNanos = 0L
             MapRenderer.reset()
         }
     }
 
-    private fun scanDungeon() {
-        if (System.currentTimeMillis() - lastScanTime < 250) return
-        lastScanTime = System.currentTimeMillis()
+    private fun scanDungeon(): Boolean {
+        val now = System.nanoTime()
+        if (lastScanNanos != 0L && now - lastScanNanos < SCAN_INTERVAL_NANOS) return false
+        lastScanNanos = now
 
-        val level = mc.level ?: return
+        val level = mc.level ?: return false
 
-        for (x in 0..10) {
-            for (z in 0..10) {
+        for (z in 0..10) {
+            for (x in 0..10) {
                 val i = z * 11 + x
                 if (grid[i] != null) continue
 
@@ -172,6 +174,7 @@ object ScanUtils {
                 }
             }
         }
+        return true
     }
 
     private fun scanTile(x: Int, z: Int, col: Int, row: Int, height: Int, chunk: LevelChunk): Any? {
@@ -183,13 +186,13 @@ object ScanUtils {
                 if (height <= 0) return null
                 val core = getCoreAtHeight(Vec2i(x, z), height, chunk)
                 val data = coreToRoomData[core] ?: return null
-                addToUnique(x, z, data, core, height, centre = true)
+                addRoomCentre(x, z, col, row, data, core, height)
             }
 
             !rowEven && !colEven -> { // 2x2 centres
                 val tile = grid[(row - 1) * 11 + col - 1] as? OdonRoom
                 if (tile != null) {
-                    addToUnique(x, z, tile.data, 0, height, centre = false)
+                    connectRoom(tile, height)
                 } else null
             }
 
@@ -207,54 +210,134 @@ object ScanUtils {
             }
 
             else -> { // connection between big rooms
-                val i = if (rowEven) row * 11 + (col - 1) else (row - 1) * 11 + col
-                if (i in 0..120) {
-                    val tile = grid[i]
-                    if (tile is OdonRoom) {
-                        if (tile.data.type == RoomType.ENTRANCE) {
-                            val door = OdonDoor(Vec2i(x, z), DoorType.NORMAL)
-                            scannedDoors.add(door)
-                            door
-                        } else {
-                            addToUnique(x, z, tile.data, 0, height, centre = false)
-                        }
-                    } else null
-                } else null
+                val beforeIndex = if (rowEven) row * 11 + col - 1 else (row - 1) * 11 + col
+                val afterIndex = if (rowEven) row * 11 + col + 1 else (row + 1) * 11 + col
+                val before = grid.getOrNull(beforeIndex) as? OdonRoom
+                val after = grid.getOrNull(afterIndex) as? OdonRoom
+                val room = reconcileConnectedRooms(before, after) ?: return null
+
+                if (room.data.type == RoomType.ENTRANCE) {
+                    val door = OdonDoor(Vec2i(x, z), DoorType.NORMAL)
+                    scannedDoors.add(door)
+                    door
+                } else {
+                    connectRoom(room, height)
+                }
             }
         }
     }
 
-    private fun addToUnique(x: Int, z: Int, data: RoomData, core: Int, height: Int, centre: Boolean): OdonRoom {
-        val roomName = data.name
-        var room = uniqueRooms[roomName]
+    private fun addRoomCentre(
+        x: Int,
+        z: Int,
+        col: Int,
+        row: Int,
+        data: RoomData,
+        core: Int,
+        height: Int,
+    ): OdonRoom {
+        val expectedComponents = data.shape.expectedTileCount
+        val connectedRooms = buildList<OdonRoom> {
+            fun addConnected(index: Int) {
+                val room = grid.getOrNull(index) as? OdonRoom ?: return
+                if (room.data.name != data.name || room.roomComponents.size >= expectedComponents) return
+                if (none { it === room }) add(room)
+            }
 
-        if (room == null) {
-            room = OdonRoom(data = data, roomComponents = mutableSetOf())
-            uniqueRooms[roomName] = room
-            scannedRooms.add(room)
+            if (col > 0) addConnected(row * 11 + col - 1)
+            if (row > 0) addConnected((row - 1) * 11 + col)
         }
 
-        if (centre) {
-            room.roomComponents.add(RoomComponent(x, z, core))
+        val joinableRooms = if (
+            connectedRooms.sumOf { it.roomComponents.size } + 1 <= expectedComponents
+        ) {
+            connectedRooms
+        } else {
+            connectedRooms.take(1)
         }
 
-        if (room.rotation == Rotations.NONE) {
-            updateRotation(room, height)
-        }
+        val room = scannedRooms.firstOrNull { scanned -> joinableRooms.any { it === scanned } }
+            ?: joinableRooms.firstOrNull()
+            ?: OdonRoom(data = data, roomComponents = linkedSetOf()).also { scannedRooms.add(it) }
 
+        joinableRooms.filterNot { it === room }.forEach { mergeRooms(room, it) }
+        room.roomComponents.add(RoomComponent(x, z, core))
+
+        if (room.rotation == Rotations.NONE) updateRotation(room, height)
         DungeonEvent.Room.Scan(room).post()
         return room
     }
 
-    fun scanMimic() { // untested
-        val chest = getBlockEntityList().find { pos ->
-            if (!pos.state.`is`(Blocks.TRAPPED_CHEST)) return@find false
+    private fun connectRoom(room: OdonRoom, height: Int): OdonRoom {
+        if (room.rotation == Rotations.NONE) updateRotation(room, height)
+        DungeonEvent.Room.Scan(room).post()
+        return room
+    }
 
-            val room = getRoomFromPos(pos.x, pos.z)
-            room != null && room.data.type != RoomType.TRAP
-        } ?: return
+    private fun reconcileConnectedRooms(first: OdonRoom?, second: OdonRoom?): OdonRoom? {
+        if (first == null) return null
+        if (second == null) return first
+        if (first === second || first.data.name != second.data.name) return first
 
-        mimicRoom = getRoomFromPos(chest.x, chest.z)
+        val componentCount = (first.roomComponents + second.roomComponents).toSet().size
+        if (componentCount > first.data.shape.expectedTileCount) return first
+
+        val target = scannedRooms.firstOrNull { it === first || it === second } ?: first
+        val source = if (target === first) second else first
+        mergeRooms(target, source)
+        return target
+    }
+
+    private fun mergeRooms(target: OdonRoom, source: OdonRoom) {
+        if (target === source) return
+
+        target.roomComponents.addAll(source.roomComponents)
+        if (target.rotation == Rotations.NONE && source.rotation != Rotations.NONE) {
+            target.rotation = source.rotation
+            target.clayPos = source.clayPos
+        }
+        target.updateState(listOf(target.state, source.state).minBy(::roomStatePriority))
+
+        for (index in grid.indices) {
+            if (grid[index] === source) grid[index] = target
+        }
+
+        if (currentRoom === source) {
+            currentRoom = target
+            DungeonEvent.Room.Enter(target).post()
+        }
+        if (mimicRoom === source) mimicRoom = target
+        if (passedRooms.remove(source)) passedRooms.add(target)
+        scannedRooms.remove(source)
+    }
+
+    private fun roomStatePriority(state: RoomState): Int = when (state) {
+        RoomState.GREEN -> 0
+        RoomState.CLEARED -> 1
+        RoomState.FAILED -> 2
+        RoomState.DISCOVERED -> 3
+        RoomState.UNOPENED -> 4
+        RoomState.UNDISCOVERED -> 5
+    }
+
+    fun scanMimic() {
+        val trappedChestsByRoom = mutableMapOf<OdonRoom, Int>()
+
+        for (pos in getBlockEntityList()) {
+            if (!pos.state.`is`(Blocks.TRAPPED_CHEST)) continue
+            val room = getRoomFromPos(pos.x, pos.z) ?: continue
+            if (room.data.type == RoomType.TRAP) continue
+            trappedChestsByRoom[room] = (trappedChestsByRoom[room] ?: 0) + 1
+        }
+
+        val found = trappedChestsByRoom.entries.firstOrNull { (room, count) ->
+            count > room.data.trappedChests
+        }?.key ?: return
+
+        if (mimicRoom !== found) {
+            mimicRoom = found
+            MapRenderer.refresh()
+        }
     }
 
     fun getRoomFromPos(x: Int, z: Int): OdonRoom? {
@@ -265,26 +348,59 @@ object ScanUtils {
     }
 
     fun updateRotation(room: OdonRoom, roomHeight: Int) {
+        if (room.roomComponents.size != room.data.shape.expectedTileCount) return
+
         if (room.data.name == "Fairy") { // Fairy room doesn't have a clay block so we need to set it manually
-            room.clayPos = room.roomComponents.firstOrNull()?.let { BlockPos(it.x - 15, roomHeight, it.z - 15) } ?: return
+            val minX = room.roomComponents.minOfOrNull { it.x } ?: return
+            val minZ = room.roomComponents.minOfOrNull { it.z } ?: return
+            room.clayPos = BlockPos(minX - 15, roomHeight, minZ - 15)
             room.rotation = Rotations.SOUTH
             return
         }
 
         val level = mc.level ?: return
-        room.rotation = Rotations.entries.dropLast(1).find { rotation ->
-            room.roomComponents.any { component ->
-                BlockPos(component.x + rotation.x, roomHeight, component.z + rotation.z).let { blockPos ->
-                    level.getBlockState(blockPos)?.block == Blocks.BLUE_TERRACOTTA && (room.roomComponents.size == 1 || horizontals.all { facing ->
-                        level.getBlockState(
-                            blockPos.offset((if (facing.axis == Direction.Axis.X) facing.stepX else 0), 0, (if (facing.axis == Direction.Axis.Z) facing.stepZ else 0))
-                        )?.block?.equalsOneOf(Blocks.AIR, Blocks.BLUE_TERRACOTTA) == true
-                    }).also { isCorrectClay -> if (isCorrectClay) room.clayPos = blockPos }
+        val candidates = if (room.data.shape == RoomShape.L) {
+            buildList<Pair<Rotations, BlockPos>> {
+                for (rotation in Rotations.entries.dropLast(1)) {
+                    for (component in room.roomComponents) {
+                        add(rotation to BlockPos(component.x + rotation.x, roomHeight, component.z + rotation.z))
+                    }
                 }
             }
-        } ?: Rotations.NONE // Rotation isn't found if we can't find the clay block
+        } else {
+            val minX = room.roomComponents.minOf { it.x }
+            val maxX = room.roomComponents.maxOf { it.x }
+            val minZ = room.roomComponents.minOf { it.z }
+            val maxZ = room.roomComponents.maxOf { it.z }
+            listOf(
+                Rotations.NORTH to BlockPos(maxX + 15, roomHeight, maxZ + 15),
+                Rotations.SOUTH to BlockPos(minX - 15, roomHeight, minZ - 15),
+                Rotations.WEST to BlockPos(maxX + 15, roomHeight, minZ - 15),
+                Rotations.EAST to BlockPos(minX - 15, roomHeight, maxZ + 15),
+            )
+        }
 
-//        if (room.rotation == Rotations.NONE) modMessage("${room.name} ROT NONE")
+        for ((rotation, blockPos) in candidates) {
+            val positionsToRead = buildList<BlockPos> {
+                add(blockPos)
+                if (room.roomComponents.size > 1) {
+                    horizontals.forEach { facing ->
+                        add(blockPos.offset(facing.stepX, 0, facing.stepZ))
+                    }
+                }
+            }
+            if (positionsToRead.any { !level.hasChunk(it.x shr 4, it.z shr 4) }) continue
+            if (level.getBlockState(blockPos).block != Blocks.BLUE_TERRACOTTA) continue
+            if (positionsToRead.drop(1).any {
+                    !level.getBlockState(it).block.equalsOneOf(Blocks.AIR, Blocks.BLUE_TERRACOTTA)
+                }) continue
+
+            room.clayPos = blockPos
+            room.rotation = rotation
+            return
+        }
+
+        room.rotation = Rotations.NONE // Rotation isn't found until its corner chunks are available.
     }
 
     private fun getCoreAtHeight(vec2: Vec2i, roomHeight: Int, chunk: LevelChunk): Int {
@@ -295,7 +411,7 @@ object ScanUtils {
 
         for (y in clampedHeight downTo 12) {
             mutableBlockPos.set(vec2.x, y, vec2.z)
-            val block = chunk.getBlockState(mutableBlockPos)?.block
+            val block = chunk.getBlockState(mutableBlockPos).block
             if (block == Blocks.AIR && bedrock >= 2 && y < 69) {
                 sb.append(CharArray(y - 11) { '0' })
                 break
@@ -315,7 +431,7 @@ object ScanUtils {
         for (y in 160 downTo 12) {
             mutableBlockPos.set(vec2.x, y, vec2.z)
             val blockState = chunk.getBlockState(mutableBlockPos)
-            if (blockState?.isAir == false) return if (blockState.block == Blocks.GOLD_BLOCK) y - 1 else y
+            if (!blockState.isAir) return if (blockState.block == Blocks.GOLD_BLOCK) y - 1 else y
         }
         return 0
     }

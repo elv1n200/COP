@@ -18,13 +18,15 @@ import cop.utils.rotateAroundNorth
 import cop.utils.rotateToNorth
 import java.lang.reflect.Type
 
-data class OdonRoom(
+class OdonRoom(
     var rotation: Rotations = Rotations.NONE,
-    var data: RoomData,
+    val data: RoomData,
     var clayPos: BlockPos = BlockPos(0, 0, 0),
     val roomComponents: MutableSet<RoomComponent>,
 ) {
     val name get() = data.name
+    var state: RoomState = RoomState.UNDISCOVERED
+        private set
 
     fun getRelativeCoords(pos: BlockPos) = pos.subtract(clayPos.atY(0)).rotateToNorth(rotation)
     fun getRelativeCoords(vec: Vec3) = vec.subtract(clayPos.x.toDouble(), 0.0, clayPos.z.toDouble()).rotateToNorth(rotation)
@@ -56,23 +58,44 @@ data class OdonRoom(
         return Vec2i((minX + maxX) / 2, (minZ + maxZ) / 2)
     }
 
-    val textColour: Colour get() = when(data.state) {
+    val textColour: Colour get() = when(state) {
         RoomState.CLEARED -> Colour.WHITE
         RoomState.GREEN -> Colour.MINECRAFT_GREEN
         RoomState.FAILED -> Colour.MINECRAFT_RED
         else -> Colour.MINECRAFT_GRAY
     }
 
+    val colour: Colour get() {
+        val base = when (data.type) {
+            RoomType.ENTRANCE -> DungeonMap.entranceRoom
+            RoomType.BLOOD    -> DungeonMap.bloodRoom
+            RoomType.FAIRY    -> DungeonMap.fairyRoom
+            RoomType.PUZZLE   -> DungeonMap.puzzleRoom
+            RoomType.TRAP     -> DungeonMap.trapRoom
+            RoomType.CHAMPION -> DungeonMap.miniRoom
+            RoomType.RARE     -> DungeonMap.rareRoom
+            else              -> DungeonMap.normalRoom
+        }
+
+        val withMimic = if (ScanUtils.mimicRoom === this) base.mix(Colour.RED) else base
+
+        return if (state.equalsOneOf(RoomState.UNDISCOVERED, RoomState.UNOPENED)) {
+            Colour.RGB(withMimic.rgb.multiply(1f - DungeonMap.darkenMultiplier))
+        } else withMimic
+    }
+
+    fun updateState(newState: RoomState) {
+        if (state == RoomState.GREEN && data.name == "Golden Oasis") return
+        state = newState
+    }
 
     fun updateState(col: Int) {
-        if (data.state == RoomState.GREEN && data.name == "Golden Oasis") return
-
-        val new = when (col) {
+        val newState = when (col) {
             34 -> RoomState.CLEARED
             18 -> when (data.type) {
                 RoomType.BLOOD -> RoomState.DISCOVERED
                 RoomType.PUZZLE -> RoomState.FAILED
-                else -> data.state
+                else -> state
             }
             30 -> when (data.type) {
                 RoomType.ENTRANCE -> RoomState.DISCOVERED
@@ -83,9 +106,7 @@ data class OdonRoom(
             else -> RoomState.DISCOVERED
         }
 
-        if (data.state != new) {
-            data.state = new
-        }
+        updateState(newState)
     }
 }
 
@@ -103,25 +124,22 @@ data class RoomComponent(val x: Int, val z: Int, val core: Int = 0) {
 
 data class RoomData(
     val name: String, val type: RoomType, val cores: List<Int>,
-    val crypts: Int, val secrets: Int, val trappedChests: Int, var state: RoomState = RoomState.UNDISCOVERED
-) {
-    val colour: Colour get() {
-        val base = when (type) {
-            RoomType.ENTRANCE -> DungeonMap.entranceRoom
-            RoomType.BLOOD    -> DungeonMap.bloodRoom
-            RoomType.FAIRY    -> DungeonMap.fairyRoom
-            RoomType.PUZZLE   -> DungeonMap.puzzleRoom
-            RoomType.TRAP     -> DungeonMap.trapRoom
-            RoomType.CHAMPION -> DungeonMap.miniRoom
-            RoomType.RARE     -> DungeonMap.rareRoom
-            else              -> DungeonMap.normalRoom
-        }
+    val crypts: Int, val secrets: Int, val trappedChests: Int,
+    val shape: RoomShape = RoomShape.UNKNOWN,
+)
 
-        val withMimic = if (this == ScanUtils.mimicRoom) base.mix(Colour.RED) else base
+enum class RoomShape(val serializedName: String, val expectedTileCount: Int) {
+    ONE_BY_ONE("1x1", 1),
+    ONE_BY_TWO("1x2", 2),
+    ONE_BY_THREE("1x3", 3),
+    ONE_BY_FOUR("1x4", 4),
+    TWO_BY_TWO("2x2", 4),
+    L("L", 3),
+    UNKNOWN("unknown", 1);
 
-        return if (state.equalsOneOf(RoomState.UNDISCOVERED, RoomState.UNOPENED)) {
-            Colour.RGB(withMimic.rgb.multiply(1f - DungeonMap.darkenMultiplier))
-        } else withMimic
+    companion object {
+        fun fromSerializedName(value: String?): RoomShape =
+            entries.firstOrNull { it.serializedName.equals(value?.trim(), ignoreCase = true) } ?: UNKNOWN
     }
 }
 
@@ -135,7 +153,8 @@ class RoomDataDeserializer : JsonDeserializer<RoomData> {
         val crypts = jsonObject?.get("crypts")?.asInt ?: 0
         val secrets = jsonObject?.get("secrets")?.asInt ?: 0
         val trappedChests = jsonObject?.get("trappedChests")?.asInt ?: 0
+        val shape = RoomShape.fromSerializedName(runCatching { jsonObject?.get("shape")?.asString }.getOrNull())
 
-        return RoomData(name, type, cores, crypts, secrets, trappedChests)
+        return RoomData(name, type, cores.toList(), crypts, secrets, trappedChests, shape)
     }
 }

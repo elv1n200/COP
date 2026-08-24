@@ -2,6 +2,7 @@ package cop.module.impl.dungeon.qol
 
 import cop.api.events.ChatEvent
 import cop.api.events.WorldEvent
+import cop.module.impl.dungeon.cheats.AutoDungeonPotion
 import cop.module.Module
 import cop.utils.ChatUtils.command
 import cop.utils.Scheduler.scheduleTask
@@ -23,21 +24,34 @@ object AutoPotionBag : Module(
     private val delay by slider("Delay", 2.0f, 0.0f, 5.0f, 0.1f, desc = "Seconds to wait before running /potionbag.", unit = "s")
 
     private var locked = false
+    private var generation = 0
 
     init {
-        on<WorldEvent.Change> { locked = false }
+        on<WorldEvent.Change> {
+            generation++
+            locked = false
+        }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
+            if (AutoDungeonPotion.handlesCurrentRun()) return@on
             if (locked) return@on
             val name = mc.player?.gameProfile?.name ?: return@on
             val plain = message.noControlCodes
             if (!plain.contains(name) || !plain.contains("is now ready!")) return@on
 
             locked = true
+            val scheduledGeneration = generation
             scheduleTask((delay * 20f).toInt()) {
-                command("potionbag")
+                if (scheduledGeneration != generation) return@scheduleTask
+                if (enabled && !AutoDungeonPotion.handlesCurrentRun()) command("potionbag")
                 locked = false
             }
         }
+    }
+
+    override fun onDisable() {
+        generation++
+        locked = false
+        super.onDisable()
     }
 }

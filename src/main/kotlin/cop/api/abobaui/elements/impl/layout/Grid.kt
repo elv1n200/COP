@@ -4,18 +4,6 @@ import cop.api.abobaui.constraints.Constraint
 import cop.api.abobaui.constraints.Constraints
 import cop.api.abobaui.elements.Layout
 
-/**
- * todo fix it. currently it's
- *  element <gap> element <gap>
- *  <gap>
- *  element <gap> element <gap>
- *  .
- *  we don't want trailing gap at the end:
- *  element <gap> element
- *  <gap>
- *  element <gap> element
- */
-
 class Grid(
     constraints: Constraints,
     gap: Constraint.Size? = null,
@@ -26,16 +14,21 @@ class Grid(
 
         var currX = 0f
         var currY = 0f
+        var rowHeight = 0f
 
         children?.forEach {
             if (it.constraints.x.undefined() && it.constraints.y.undefined() && it.enabled) {
-                if (currX + it.width + padding > width) {
+                // The gap belongs between cells, not after the last cell. Using
+                // it in the fit check made an exactly fitting final column wrap.
+                if (currX > 0f && currX + it.width > width) {
                     currX = 0f
-                    currY += it.height + padding
+                    currY += rowHeight + padding
+                    rowHeight = 0f
                 }
                 it.internalX = currX
                 it.internalY = currY
                 currX += it.width + padding
+                rowHeight = maxOf(rowHeight, it.height)
             }
         }
     }

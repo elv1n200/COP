@@ -19,7 +19,13 @@ class MapSetting<K : Any, V : Any, T : MutableMap<K, V>>(
     private val type: Type,
 ) : Setting<T>(name, description = ""), Saving {
 
-    override var value: T = default
+    private fun copyDefault(): T = gson.fromJson(gson.toJsonTree(default), type)
+
+    override var value: T = copyDefault()
+
+    override fun reset() {
+        value = copyDefault()
+    }
 
     override fun write(): JsonElement = gson.toJsonTree(value)
 

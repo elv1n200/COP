@@ -75,7 +75,7 @@ object SimonSays : Module(
             fullReset()
         }
 
-        on<ChatEvent.Packet> {
+        on<ChatEvent.PacketClient> {
             if (message.noControlCodes == "[BOSS] Goldor: Who dares trespass into my domain?") start()
         }
 
@@ -83,7 +83,7 @@ object SimonSays : Module(
             if (startActive || packet.hitResult.blockPos != startButton) return@on
 
             val isActive = EntityUtils.getEntities<ArmorStand>(standBox) {
-                it.distanceTo(player) < 6 && it.displayName?.string?.contains("Device Active") == true
+                it.distanceTo(player) < 6 && it.displayName.string.contains("Device Active")
             }.isNotEmpty()
             if (isActive) return@on
 
@@ -192,7 +192,7 @@ object SimonSays : Module(
                 var finished = false
                 var active = forceDevice
                 EntityUtils.getEntities<ArmorStand>(standBox) { it.distanceTo(player) < 6 }.forEach {
-                    val name = it.displayName?.string ?: return@forEach
+                    val name = it.displayName.string
                     if ("Device Active" in name) finished = true
                     if ("Device" in name) active = true
                 }

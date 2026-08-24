@@ -30,7 +30,12 @@ class KeybindComponent(
 
     constructor(name: String, defaultKeyCode: Int, desc: String = "") : this(name, Keybinding(defaultKeyCode), desc)
 
-    override var value: Keybinding = default
+    override var value: Keybinding = Keybinding(default.key, default.modifiers.toMutableSet()).also {
+        // The key/modifier state is persisted independently, but the callbacks
+        // are runtime behaviour and must stay attached to the live binding.
+        it.onPress = default.onPress
+        it.onRelease = default.onRelease
+    }
 
     private var key: Int
         get() = value.key
@@ -61,19 +66,26 @@ class KeybindComponent(
     override fun read(element: JsonElement) {
         if (element.isJsonObject) {
             val obj = element.asJsonObject
-            value.key = obj.get("key").asInt
+            val newKey = obj.get("key")?.asInt ?: error("keybind key missing")
+            val newModifiers = mutableSetOf<Int>()
+            obj.get("modifiers")?.asJsonArray?.forEach { newModifiers.add(it.asInt) }
+
+            // Commit only after the complete JSON value has been validated so
+            // malformed modifiers cannot leave a half-applied keybind behind.
+            value.key = newKey
             value.modifiers.clear()
-            obj.get("modifiers")?.asJsonArray?.forEach {
-                value.modifiers.add(it.asInt)
-            }
+            value.modifiers.addAll(newModifiers)
         } else if (element.isJsonPrimitive) { // legacy
-            value.key = element.asInt
+            val newKey = element.asInt
+            value.key = newKey
             value.modifiers.clear()
         }
     }
 
     override fun reset() {
-        value = default
+        value.key = default.key
+        value.modifiers.clear()
+        value.modifiers.addAll(default.modifiers)
     }
 
     fun getKeyName(): String {

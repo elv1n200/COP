@@ -30,6 +30,10 @@ class EntityInteract(private val entity: Entity, private val action: AuraAction)
                     )
                 )
 
+                // Before 26, vanilla sent INTERACT_AT followed by the plain
+                // INTERACT fallback. The 26.x packet combines both semantics,
+                // so sending this second packet would activate the entity twice.
+                //? if < 26 {
                 mc.connection?.send(
                     ServerboundInteractPacket.createInteractionPacket(
                         entity,
@@ -37,6 +41,7 @@ class EntityInteract(private val entity: Entity, private val action: AuraAction)
                         InteractionHand.MAIN_HAND
                     )
                 )
+                //? }
 
                 debugBox(hitVec)
             }

@@ -5,7 +5,7 @@ import net.minecraft.world.entity.player.Player
 import net.minecraft.world.entity.player.PlayerSkin
 import cop.api.events.DungeonEvent
 import cop.api.events.core.EventBus
-import cop.api.skyblock.dungeon.odonscanning.MapRenderer.mapSize
+import cop.api.skyblock.dungeon.odonscanning.MapRenderer
 import cop.utils.EntityUtils.playerEntities
 import cop.utils.Vec2i
 
@@ -32,22 +32,14 @@ data class DungeonPlayer(
     var deaths: Int = 0,
     val colour: Colour = Colour.WHITE,
     val p3Stats: P3Stats = P3Stats(),
-    var mapPos: Vec2i = Vec2i(0, 0),
+    var mapPos: Vec2i? = null,
     var yaw: Float = 0f,
 ) {
     private var cachedEntity: Player? = null
 
-    fun position(): Pair<Float, Float> =
-        entity?.let {
-            ((it.x + 201f) / (32f / 20f)).toFloat() to ((it.z + 201f) / (32f / 20f)).toFloat()
-        } ?: run {
-            val w = (mapSize.x * 16 + (mapSize.x - 1) * 4).toFloat()
-            val h = (mapSize.z * 16 + (mapSize.z - 1) * 4).toFloat()
-
-            val x = (mapPos.x / 2.0f) + (w / 2.0f)
-            val z = (mapPos.z / 2.0f) + (h / 2.0f)
-            x to z
-        }
+    fun position(): Pair<Float, Float>? =
+        entity?.let { MapRenderer.worldToRender(it.x, it.z) }
+            ?: mapPos?.let(MapRenderer::decorationToRender)
 
     fun yaw(): Float = entity?.yRot ?: yaw
 

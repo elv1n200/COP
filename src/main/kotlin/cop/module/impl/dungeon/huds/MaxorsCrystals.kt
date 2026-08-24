@@ -58,7 +58,7 @@ object MaxorsCrystals : Module(
             }
         }
 
-        on<PacketEvent.Received, ClientboundAddEntityPacket> {
+        on<PacketEvent.ReceivedClient, ClientboundAddEntityPacket> {
             val pt = pickupTime ?: return@on
             if (!placeTimer) return@on
             if (packet.type != EntityType.END_CRYSTAL) return@on

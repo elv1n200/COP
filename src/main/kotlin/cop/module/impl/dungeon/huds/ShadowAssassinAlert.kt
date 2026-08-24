@@ -13,7 +13,7 @@ object ShadowAssassinAlert : Module(
     desc = "Sends an alert when SA jumps you."
 ) {
     init {
-        on<PacketEvent.Received, ClientboundInitializeBorderPacket> {
+        on<PacketEvent.ReceivedClient, ClientboundInitializeBorderPacket> {
             if (((Dungeon.isFloor(3) || Dungeon.isFloor(2)) && Dungeon.inBoss)) return@on
             PlayerUtils.setTitle("", "§aShadow Assassin!", playSound = true, stayAlive = 35, fadeOut = 0)
         }

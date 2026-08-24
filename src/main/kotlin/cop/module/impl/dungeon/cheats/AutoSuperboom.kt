@@ -77,6 +77,7 @@ object AutoSuperboom : Module(
 
             val block = level.getBlockState(hit.blockPos).block
             val blockId = BuiltInRegistries.BLOCK.getKey(block).toString()
+            if (blockId == "minecraft:barrier" && BarrierBoom.enabled) return@on
             if (!isBreakable(blockId)) return@on
 
             val originalSlot = player.inventory.selectedSlot

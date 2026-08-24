@@ -69,7 +69,7 @@ class UIContainer(ui: AbobaUI.Instance, val cancelling: Boolean = true) : UIHand
             close()
         },
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             if (packet is ClientboundContainerClosePacket) close()
         },
 

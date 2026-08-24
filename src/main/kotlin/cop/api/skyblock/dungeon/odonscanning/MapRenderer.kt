@@ -1,9 +1,11 @@
 package cop.api.skyblock.dungeon.odonscanning
 
 import net.minecraft.client.gui.components.PlayerFaceRenderer
+import net.minecraft.core.component.DataComponents
 import net.minecraft.network.protocol.game.ClientboundMapItemDataPacket
 import net.minecraft.resources.ResourceLocation
 import net.minecraft.world.level.saveddata.maps.MapDecorationTypes
+import net.minecraft.world.level.saveddata.maps.MapItemSavedData
 import cop.CopMod.MOD_ID
 import cop.CopMod.mc
 import cop.api.abobaui.constraints.Constraint
@@ -38,7 +40,12 @@ import cop.api.skyblock.dungeon.Dungeon
 import cop.api.skyblock.dungeon.Dungeon.floor
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonDoor
 import cop.api.skyblock.dungeon.odonscanning.tiles.OdonRoom
+import cop.api.skyblock.dungeon.odonscanning.tiles.DoorType
+import cop.api.skyblock.dungeon.odonscanning.tiles.RoomComponent
+import cop.api.skyblock.dungeon.odonscanning.tiles.RoomData
+import cop.api.skyblock.dungeon.odonscanning.tiles.RoomState
 import cop.api.skyblock.dungeon.odonscanning.tiles.RoomType
+import cop.mixins.accessors.MapItemSavedDataAccessor
 import cop.module.impl.dungeon.cheats.AutoClear
 import cop.module.impl.dungeon.worldrender.DungeonMap
 import cop.utils.StringUtils.width
@@ -52,11 +59,13 @@ import cop.utils.ui.rendering.Font
 import cop.utils.ui.rendering.NVGRenderer
 import cop.utils.ui.rendering.NVGRenderer.defaultFont
 import cop.utils.ui.watch
-import kotlin.jvm.optionals.getOrNull
 
 object MapRenderer {
 
-    private var startCoords: Vec2i? = null
+    private const val WORLD_GRID_START = -185
+    private var calibration: DungeonMapData.Calibration? = null
+    private var activeDungeonMapId: Int? = null
+    private var mapSnapshot: DungeonMapData.Snapshot? = null
     var mapSize: Vec2i = Vec2i(0, 0)
     var roomSize: Int? = null
         private set
@@ -108,6 +117,8 @@ object MapRenderer {
                     DungeonMap.fontScale,
                     DungeonMap.roomRadius,
                     DungeonMap.darkenMultiplier,
+                    DungeonMap.showFullLayout,
+                    Dungeon.dungeonTeammates.size,
                 )
             }) { refresh() }
 
@@ -133,7 +144,10 @@ object MapRenderer {
                 val dynamicH = baseH * newScale
 
                 group(constrain(Centre, Centre, dynamicW.px, dynamicH.px)) {
-                    ScanUtils.scannedDoors.forEach { door ->
+                    val rooms = roomsForRender(config.autoClear)
+                    val doors = doorsForRender(config.autoClear)
+
+                    doors.forEach { door ->
                         val pos = door.placement
                         val size = door.size
 
@@ -148,7 +162,7 @@ object MapRenderer {
                         )
                     }
 
-                    ScanUtils.scannedRooms.forEach { room ->
+                    rooms.forEach { room ->
                         renderComponents(new, room)
                         renderName(new, room)
                     }
@@ -166,15 +180,10 @@ object MapRenderer {
         val (mapScale, _, font) = config
         val icon = config.icon
         val (scale, heads, ownHead, border, _, classColour, thickness, name, whenLeap, nameScale) = icon
-        watch({ Dungeon.dungeonTeammates.size }) {
-            refresh()
-        }
-
-        // Snapshot before iterating — dungeonTeammates is a plain ArrayList
-        // shared with the network packet thread (party join/leave updates it
-        // mid-render), so direct iteration races into a ConcurrentModification
-        // exception under load (slower client, longer per-frame render).
+        // Build from a stable party snapshot. Remote players without an entity
+        // stay hidden until a validated Magical Map marker arrives.
         Dungeon.dungeonTeammates.toList().forEach { player ->
+            if (player.position() == null) return@forEach
             val self = player.name == mc.player?.name?.string
             val useHead = heads && (!self || ownHead)
 
@@ -189,13 +198,13 @@ object MapRenderer {
             // `w × h`; the border extends `t/2` outside on each side.
             val x = object : Constraint.Position {
                 override fun calculatePos(element: Element, horizontal: Boolean): Float {
-                    val pos = player.position().first * mapScale - w / 2f
+                    val pos = (player.position()?.first ?: return 0f) * mapScale - w / 2f
                     return pos.coerceIn(t / 2f, (width - w - t / 2f).coerceAtLeast(t / 2f))
                 }
             }
             val z = object : Constraint.Position {
                 override fun calculatePos(element: Element, horizontal: Boolean): Float {
-                    val pos = player.position().second * mapScale - h / 2f
+                    val pos = (player.position()?.second ?: return 0f) * mapScale - h / 2f
                     return pos.coerceIn(t / 2f, (height - h - t / 2f).coerceAtLeast(t / 2f))
                 }
             }
@@ -205,7 +214,7 @@ object MapRenderer {
                     init { usingCtx = true }
 
                     override fun drawCtx() {
-                        if (player.isDead) return
+                        if (player.isDead || player.position() == null) return
                         parent?.redraw()
                         val wi = w.toInt()
                         val hi = h.toInt()
@@ -235,7 +244,7 @@ object MapRenderer {
                 if (name && !self) textSupplied(
                     supplier = {
                         val holdingLeap = mc.player?.mainHandItem?.skyblockId?.equalsOneOf("INFINITE_SPIRIT_LEAP", "SPIRIT_LEAP") == true
-                        if (!whenLeap || holdingLeap) player.name else "  "
+                        if (player.position() != null && (!whenLeap || holdingLeap)) player.name else "  "
                     },
                     font = font,
                     size = (18f * nameScale).px,
@@ -252,7 +261,7 @@ object MapRenderer {
         val (scale, radius, _, _, _, _, _, autoClear) = config
 
         val c = {
-            val base = room.data.colour
+            val base = room.colour
             if (autoClear && Dungeon.currentRoom == room) base.mix(AutoClear.roomInCol.withAlpha(255), AutoClear.roomInCol.alpha).rgb else base.rgb
         }
 
@@ -378,7 +387,7 @@ object MapRenderer {
     }
 
     private fun ElementScope<*>.renderName(config: MapConfig, room: OdonRoom) {
-        if (room.data.type in listOf(RoomType.ENTRANCE, RoomType.FAIRY, RoomType.BLOOD)) return
+        if (room.name == "Unknown" || room.data.type in listOf(RoomType.ENTRANCE, RoomType.FAIRY, RoomType.BLOOD)) return
         val (scale, _, font, fontScale, shadow) = config
 
         val lines = room.name.split(" ")
@@ -400,8 +409,10 @@ object MapRenderer {
     }
 
     fun onChunkLoad() {
+        if (!Dungeon.inClear || calibration != null) return
+        val floorNumber = floor?.floorNumber ?: return
         if (mapSize.x == 0 && mapSize.z == 0) {
-            mapSize = when (floor?.floorNumber) {
+            mapSize = when (floorNumber) {
                 0 -> Vec2i(4, 4)
                 1 -> Vec2i(4, 5)
                 2, 3 -> Vec2i(5, 5)
@@ -412,113 +423,194 @@ object MapRenderer {
     }
 
     fun update(packet: ClientboundMapItemDataPacket) {
-        if (packet.mapId.id and 1000 != 0) return
-        val colours = mc.level?.getMapData(packet.mapId)?.colors ?: return
+        if (!Dungeon.inClear) return
+        val floorNumber = floor?.floorNumber ?: return
+        val packetMapId = packet.mapId.id
+        val hotbarMapId = mc.player?.inventory?.getItem(8)?.get(DataComponents.MAP_ID)?.id
 
-        if (startCoords == null) {
-            val (greenStart, greenLength) = findGreenRoom(colours)
-            if (greenLength != 16 && greenLength != 18) return
+        if (activeDungeonMapId != null && activeDungeonMapId != packetMapId) return
+        if (activeDungeonMapId == null && hotbarMapId != null && hotbarMapId != packetMapId) return
 
-            roomSize = greenLength
+        // The mixin calls us after Vanilla has applied the packet, so this is
+        // an atomic view of the complete local Magical Map.
+        val mapData = mc.level?.getMapData(packet.mapId) ?: return
+        val nextCalibration = calibration
+            ?.takeIf { it.floorNumber == floorNumber }
+            ?: DungeonMapData.calibrate(mapData.colors, floorNumber)
+            ?: return
 
-            val (start, center, size) = when (floor?.floorNumber) {
-                0 -> Triple(Vec2i(22, 22), Vec2i(-137, -137), Vec2i(4, 4))
-                1 -> Triple(Vec2i(22, 11), Vec2i(-137, -121), Vec2i(4, 5))
-                2, 3 -> Triple(Vec2i(11, 11), Vec2i(-121, -121), Vec2i(5, 5))
-                else -> {
-                    val s = Vec2i((greenStart and 127) % (greenLength + 4), (greenStart shr 7) % (greenLength + 4))
-                    val extraX = if (s.x == 5) 1 else 0
-                    val extraZ = if (s.z == 5) 1 else 0
+        val geometryChanged = calibration != nextCalibration
+        calibration = nextCalibration
+        activeDungeonMapId = packetMapId
+        roomSize = nextCalibration.roomSize
+        mapCentre = nextCalibration.mapCentre
+        mapSize = nextCalibration.mapSize
 
-                    Triple(
-                        s,
-                        Vec2i(-121 + (extraX * 16), -121 + (extraZ * 16)),
-                        Vec2i(5 + extraX, 5 + extraZ)
-                    )
-                }
+        val nextSnapshot = DungeonMapData.parse(mapData.colors, nextCalibration)
+        val snapshotChanged = mapSnapshot != nextSnapshot
+        mapSnapshot = nextSnapshot
+
+        applySnapshotToWorldScan(nextSnapshot)
+        updatePlayerDecorations(mapData)
+
+        if (geometryChanged || snapshotChanged) refresh()
+    }
+
+    fun worldToRender(x: Double, z: Double): Pair<Float, Float> =
+        (8.0 + (x - WORLD_GRID_START) / 32.0 * 20.0).toFloat() to
+            (8.0 + (z - WORLD_GRID_START) / 32.0 * 20.0).toFloat()
+
+    fun decorationToRender(mapPos: Vec2i): Pair<Float, Float>? =
+        calibration?.let { DungeonMapData.decorationToRender(mapPos, it) }
+
+    /** Returns the immutable Magical Map entry which overlaps [room]. */
+    internal fun snapshotFor(room: OdonRoom): DungeonMapData.RoomSnapshot? {
+        val cells = room.roomComponents.mapTo(linkedSetOf(), ::roomCell)
+        if (cells.isEmpty()) return null
+
+        return mapSnapshot?.rooms
+            ?.maxByOrNull { candidate -> candidate.components.count { it in cells } }
+            ?.takeIf { candidate -> candidate.components.any { it in cells } }
+    }
+
+    private fun applySnapshotToWorldScan(snapshot: DungeonMapData.Snapshot) {
+        ScanUtils.scannedRooms.forEach { room ->
+            val bestMatch = snapshot.rooms.maxByOrNull { candidate ->
+                room.roomComponents.count { component -> roomCell(component) in candidate.components }
+            } ?: return@forEach
+
+            if (room.roomComponents.any { roomCell(it) in bestMatch.components }) {
+                room.updateState(bestMatch.state)
             }
-
-            startCoords = start
-            mapCentre = center
-            mapSize = size
         }
 
-        packet.decorations.getOrNull()?.let { decorations ->
-            // Snapshot — same race as renderIcons. This runs on the network
-            // packet thread and could trip on a concurrent mutation from
-            // another network handler that hasn't returned yet.
-            val playerIterator = Dungeon.dungeonTeammates.toList().iterator()
-
-            decorations.forEach { decoration ->
-                if (decoration.type.value() == MapDecorationTypes.FRAME.value()) return@forEach
-
-                val player = playerIterator.asSequence().firstOrNull { !it.isDead } ?: return@forEach
-
-                player.mapPos = Vec2i(decoration.x.toInt(), decoration.y.toInt())
-                player.yaw = decoration.rot() * 360 / 16f
+        val doorsByCell = snapshot.doors.associateBy { it.cell }
+        ScanUtils.scannedDoors.forEach { door ->
+            val fromMap = doorsByCell[doorCell(door)] ?: return@forEach
+            if (fromMap.type != DoorType.NORMAL || door.type == DoorType.NORMAL) {
+                door.type = fromMap.type
             }
-        }
-
-        val rs = roomSize ?: return
-        val halfRoom = rs / 2
-        val halfTile = halfRoom + 2
-        val centreX = startCoords!!.x + halfRoom
-        val centreZ = startCoords!!.z + halfRoom
-
-
-        for (x in 0..10) {
-            for (z in 0..10) {
-                val tile = ScanUtils.grid[z * 11 + x] ?: continue
-
-                val mapX = centreX + x * halfTile
-                val mapY = centreZ + z * halfTile
-
-                if (mapX in 0..127 && mapY in 0..127) {
-                    val col = colours[mapY * 128 + mapX].toInt() and 0xFF
-
-                    when (tile) {
-                        is OdonRoom -> {
-                            val stateCol = if (tile.roomComponents.size > 1) {
-                                val topLeft = tile.roomComponents.minBy { it.x * 1000 + it.z }
-
-                                val gx = (topLeft.x + 185) / 16
-                                val gz = (topLeft.z + 185) / 16
-
-                                val tx = centreX + gx * halfTile
-                                val ty = centreZ + gz * halfTile
-
-                                if (tx in 0..127 && ty in 0..127) colours[ty * 128 + tx].toInt() and 0xFF else col
-                            } else col
-
-                            tile.updateState(stateCol)
-                        }
-                        is OdonDoor -> tile.updateState(col)
-                    }
-                }
-            }
+            door.state = fromMap.state
+            door.locked = door.state == RoomState.UNOPENED &&
+                (door.type == DoorType.WITHER || door.type == DoorType.BLOOD)
         }
     }
+
+    private fun updatePlayerDecorations(mapData: MapItemSavedData) {
+        val decorations = (mapData as? MapItemSavedDataAccessor)
+            ?.`cop$getDecorations`()
+            ?: return
+        val selfName = mc.player?.name?.string
+        val self = Dungeon.dungeonTeammates.firstOrNull { it.name == selfName }
+        val livingTeammates = Dungeon.dungeonTeammates.filter { it.name != selfName && !it.isDead }
+        val assignedNames = mutableSetOf<String>()
+        var structureChanged = false
+
+        decorations.forEach { (key, decoration) ->
+            val player = if (decoration.type.value() == MapDecorationTypes.FRAME.value()) {
+                self
+            } else {
+                key.lastOrNull()?.digitToIntOrNull()?.let(livingTeammates::getOrNull)
+            } ?: return@forEach
+
+            val hadPosition = player.position() != null
+            player.mapPos = Vec2i(decoration.x.toInt(), decoration.y.toInt())
+            player.yaw = decoration.rot() * 360f / 16f
+            assignedNames += player.name
+            if (!hadPosition && player.position() != null) structureChanged = true
+        }
+
+        Dungeon.dungeonTeammates.forEach { player ->
+            if (player.name in assignedNames || player.entity != null || player.mapPos == null) return@forEach
+            player.mapPos = null
+            structureChanged = true
+        }
+
+        if (structureChanged) refresh()
+    }
+
+    private fun roomsForRender(autoClear: Boolean): List<OdonRoom> {
+        val scanned = ScanUtils.scannedRooms.toList()
+        val snapshot = mapSnapshot
+        if (autoClear || !DungeonMap.showFullLayout || snapshot == null) return scanned
+
+        // Snapshot rooms are display-only placeholders. Known world-scanned
+        // rooms are rendered last, so exact data and mimic state always win.
+        val scannedCells = scanned.map { room ->
+            room.roomComponents.mapTo(linkedSetOf(), ::roomCell)
+        }
+        val placeholders = snapshot.rooms.mapNotNull { room ->
+            if (scannedCells.any { it == room.components }) null else snapshotRoom(room)
+        }
+        return placeholders + scanned
+    }
+
+    private fun doorsForRender(autoClear: Boolean): List<OdonDoor> {
+        val scanned = ScanUtils.scannedDoors.toList()
+        val snapshot = mapSnapshot
+        if (autoClear || !DungeonMap.showFullLayout || snapshot == null) return scanned
+
+        val scannedByCell = scanned.associateBy(::doorCell)
+        val rendered = snapshot.doors.map { door -> scannedByCell[door.cell] ?: snapshotDoor(door) }
+        val snapshotCells = snapshot.doors.mapTo(hashSetOf()) { it.cell }
+        return rendered + scanned.filter { doorCell(it) !in snapshotCells }
+    }
+
+    private fun snapshotRoom(snapshot: DungeonMapData.RoomSnapshot): OdonRoom {
+        val components = snapshot.components.mapTo(linkedSetOf()) { cell ->
+            RoomComponent(
+                WORLD_GRID_START + cell.x * 32,
+                WORLD_GRID_START + cell.z * 32,
+            )
+        }
+        val data = RoomData(
+            name = "Unknown",
+            type = snapshot.type,
+            cores = emptyList(),
+            crypts = 0,
+            secrets = 0,
+            trappedChests = 0,
+        )
+        return OdonRoom(data = data, roomComponents = components).also {
+            it.updateState(snapshot.state)
+        }
+    }
+
+    private fun snapshotDoor(snapshot: DungeonMapData.DoorSnapshot): OdonDoor =
+        OdonDoor(
+            Vec2i(
+                WORLD_GRID_START + snapshot.cell.x * 16,
+                WORLD_GRID_START + snapshot.cell.z * 16,
+            ),
+            snapshot.type,
+        ).also { door ->
+            door.state = snapshot.state
+            door.locked = door.state == RoomState.UNOPENED &&
+                (door.type == DoorType.WITHER || door.type == DoorType.BLOOD)
+        }
+
+    private fun roomCell(component: RoomComponent) = DungeonMapData.Cell(
+        (component.x - WORLD_GRID_START) / 32,
+        (component.z - WORLD_GRID_START) / 32,
+    )
+
+    private fun doorCell(door: OdonDoor) = DungeonMapData.Cell(
+        (door.pos.x - WORLD_GRID_START) / 16,
+        (door.pos.z - WORLD_GRID_START) / 16,
+    )
 
     fun reset() {
-        startCoords = null
+        calibration = null
+        activeDungeonMapId = null
+        mapSnapshot = null
         roomSize = null
         mapCentre = Vec2i(0, 0)
-        refreshShit = 0
         mapSize = Vec2i(0, 0)
-    }
-
-    private fun findGreenRoom(mapData: ByteArray): Pair<Int, Int> {
-        var start = -1
-        var length = 0
-        for (i in mapData.indices) {
-            if (mapData[i].toInt() == 30) {
-                if (length++ == 0) start = i
-            } else {
-                if (length >= 16) return start to length
-                length = 0
-            }
+        Dungeon.dungeonTeammates.forEach { player ->
+            player.mapPos = null
+            player.yaw = 0f
         }
-        return start to length
+        refreshShit = 0
     }
 
     data class MapConfig(

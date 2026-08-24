@@ -1,7 +1,5 @@
 package cop.api.skyblock.dungeon
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import net.minecraft.client.player.LocalPlayer
 import net.minecraft.core.BlockPos
 import net.minecraft.network.protocol.common.ClientboundPingPacket
@@ -13,7 +11,6 @@ import net.minecraft.world.level.block.SkullBlock
 import net.minecraft.world.level.block.entity.SkullBlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import cop.CopMod.mc
-import cop.CopMod.scope
 import cop.annotations.Init
 import cop.api.colour.Colour
 import cop.api.colour.withAlpha
@@ -228,7 +225,7 @@ object Dungeon {
 //            dungeonStats.knownSecrets += room.data.secrets
 //        }
 
-        on<PacketEvent.Received> {
+        on<PacketEvent.ReceivedClient> {
             with(packet) {
                 when (this) {
                     is ClientboundPlayerInfoUpdatePacket -> {
@@ -237,9 +234,8 @@ object Dungeon {
                                     ClientboundPlayerInfoUpdatePacket.Action.ADD_PLAYER)
                             }) return@on
                         val tabListEntries = entries()
-                            ?.mapNotNull { it.displayName }
-                            ?.ifEmpty { return@on }
-                            ?: return@on
+                            .mapNotNull { it.displayName }
+                            .ifEmpty { return@on }
 
                         val stringEntries = tabListEntries.map { it.string }
                         val colouredEntries = tabListEntries.map { it.string to Colour.RGB(it.siblings.lastOrNull()?.style?.color?.value ?: Colour.WHITE.rgb).withAlpha(1.0f) }
@@ -250,12 +246,12 @@ object Dungeon {
                     }
 
                     is ClientboundSetPlayerTeamPacket -> {
-                        val team = parameters?.orElse(null) ?: return@on
+                        val team = parameters.orElse(null) ?: return@on
 
-                        val text = team.playerPrefix?.string?.noControlCodes?.plus(team.playerSuffix?.string?.noControlCodes) ?: return@on
+                        val text = team.playerPrefix.string.noControlCodes + team.playerSuffix.string.noControlCodes
 
                         floorRegex.find(text)?.groupValues?.get(1)?.let {
-                            scope.launch(Dispatchers.IO) { isPaul = false /*hasBonusPaulScore()*/ } // fixme
+                            isPaul = false // TODO: restore mayor bonus lookup when a reliable source is available.
                             floor = Floor.valueOf(it)
                         }
 
@@ -270,13 +266,13 @@ object Dungeon {
 
                     is ClientboundTabListPacket -> {
                         Blessing.entries.forEach { blessing ->
-                            blessing.regex.find(footer?.string ?: return@forEach)
+                            blessing.regex.find(footer.string)
                                 ?.let { blessing.current = romanToInt(it.groupValues[1]) }
                         }
                     }
 
                     is ClientboundSystemChatPacket -> {
-                        val message = content?.string?.noControlCodes ?: return@on
+                        val message = content.string.noControlCodes
                         if (expectingBloodRegex.matches(message)) expectingBloodUpdate = true
                         doorOpenRegex.find(message)?.let { dungeonStats.doorOpener = it.groupValues[1] }
                         deathRegex.find(message)?.let { match ->
