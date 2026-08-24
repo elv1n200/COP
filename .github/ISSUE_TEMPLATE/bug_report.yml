@@ -15,7 +15,7 @@ body:
     attributes:
       label: COP-Version / Commit
       description: Steht im JAR-Dateinamen; bei einem lokalen Build zusätzlich den Commit angeben.
-      placeholder: "1.8.0-beta.1 / abc1234"
+      placeholder: "1.8.0-beta.2 / abc1234"
     validations:
       required: true
 

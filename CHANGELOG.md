@@ -38,6 +38,11 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   verzögerte Klicks oder Close-Pakete können keine neu geöffnete Session mit
   wiederverwendeter Container-ID treffen.
 
+### Fixed
+
+- Startabsturz auf Minecraft 26.1.2 behoben: Auto Terms wertet intrinsische
+  Item-Glints erst nach dem Registry-Bootstrap aus (`Components not bound yet`).
+
 ### Security
 
 - Fremde Noamm-/Quoi-Downloader, WebSockets, Service-Endpunkte und Assets werden nicht übernommen.

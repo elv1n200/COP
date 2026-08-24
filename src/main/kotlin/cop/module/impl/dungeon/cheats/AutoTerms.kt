@@ -370,9 +370,20 @@ object AutoTerms : Module(
         "cactus" to "green",
     )
 
-    private val INTRINSIC_GLINT_ITEMS: Set<Item> = BuiltInRegistries.ITEM
-        .filterTo(hashSetOf()) { it.components().has(DataComponents.ENCHANTMENT_GLINT_OVERRIDE) }
-        .also { it += Items.GOLDEN_APPLE }
+    /**
+     * Items whose normal appearance already has an enchantment glint.
+     *
+     * Module objects are constructed from Fabric's entrypoint, before Minecraft
+     * has finished binding the built-in item components.  Resolving this set
+     * eagerly therefore crashes the client with "Components not bound yet".
+     * The first NAME terminal is opened long after registry bootstrap, so defer
+     * the lookup until it is actually needed.
+     */
+    private val INTRINSIC_GLINT_ITEMS: Set<Item> by lazy(LazyThreadSafetyMode.NONE) {
+        BuiltInRegistries.ITEM
+            .filterTo(hashSetOf()) { it.components().has(DataComponents.ENCHANTMENT_GLINT_OVERRIDE) }
+            .also { it += Items.GOLDEN_APPLE }
+    }
 
     /** The 3×3 grid of colour-cyclable slots inside the chest. */
     private val RUBIX_SLOTS = intArrayOf(12, 13, 14, 21, 22, 23, 30, 31, 32)
