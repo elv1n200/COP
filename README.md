@@ -7,14 +7,14 @@
 <p><strong>Ein fokussiertes Hypixel-SkyBlock-Toolkit für Fabric:</strong><br>
 Dungeons, QoL, Rendering, Mining und anpassbare HUDs in einer Client-Mod.</p>
 
-[![Build mc26](https://img.shields.io/github/actions/workflow/status/elv1n200/COP/build.yml?branch=mc26&label=mc26%20build&logo=github&style=for-the-badge)](https://github.com/elv1n200/COP/actions/workflows/build.yml?query=branch%3Amc26)
+[![Build](https://img.shields.io/github/actions/workflow/status/elv1n200/COP/build.yml?branch=main&label=build&logo=github&style=for-the-badge)](https://github.com/elv1n200/COP/actions/workflows/build.yml?query=branch%3Amain)
 [![Minecraft 26.1.2](https://img.shields.io/badge/Minecraft-26.1.2-62B47A?style=for-the-badge&logo=minecraft)](#voraussetzungen)
 [![Java 25](https://img.shields.io/badge/Java-25-EA2D2E?style=for-the-badge&logo=openjdk)](#voraussetzungen)
 [![Fabric](https://img.shields.io/badge/Loader-Fabric-DBD0B4?style=for-the-badge)](https://fabricmc.net/)
 [![GPL-3.0](https://img.shields.io/github/license/elv1n200/COP?style=for-the-badge)](LICENSE)
 [![Client-Test](https://img.shields.io/badge/Client--Test-Checkliste_erforderlich-F59E0B?style=for-the-badge)](docs/client-test-checklist.md)
 
-[Download](https://github.com/elv1n200/COP/releases/latest) · [Installation](#installation) · [Features](#features) · [Commands](#commands) · [Dokumentation](docs/README.md) · [Support](SUPPORT.md)
+[Download](https://github.com/elv1n200/COP/releases/latest) · [Installation](#installation) · [Features](#features) · [Commands](#commands) · [Dokumentation](docs/README.md) · [Branches](BRANCHING.md) · [Support](SUPPORT.md)
 
 </div>
 

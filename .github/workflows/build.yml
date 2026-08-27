@@ -1,11 +1,11 @@
 name: Build
 
-# Runs on every push to either supported branch + every PR targeting
-# them. Builds the active branch's jar(s) and uploads them as artifacts
-# so PR reviewers can grab a one-off binary without checking out locally.
+# Runs on every push to an active branch + every PR targeting it. Builds the
+# jar(s) and uploads them as artifacts so PR reviewers can grab a one-off binary
+# without checking out locally.
 #
-# JDK selection is branch-aware: main + 1.21.x branches use JDK 21,
-# the mc26 branch uses JDK 25 (Minecraft 26 needs a newer toolchain).
+# COP targets Minecraft 26.x only, which is Java-25 bytecode — so every build
+# uses JDK 25. The frozen `legacy-1.21` branch is not built here.
 on:
   push:
     branches: [main, mc26]
@@ -30,24 +30,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Detect target branch
-        id: branch
-        run: |
-          # For pushes, github.ref_name is the branch.
-          # For PRs, use base_ref (the target branch).
-          BRANCH="${{ github.base_ref || github.ref_name }}"
-          echo "name=$BRANCH" >> $GITHUB_OUTPUT
-          if [ "$BRANCH" = "mc26" ]; then
-            echo "java=25" >> $GITHUB_OUTPUT
-          else
-            echo "java=21" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set up JDK ${{ steps.branch.outputs.java }}
+      - name: Set up JDK 25
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: ${{ steps.branch.outputs.java }}
+          java-version: 25
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
@@ -59,7 +46,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cop-jars-${{ steps.branch.outputs.name }}-${{ github.sha }}
+          name: cop-jars-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
           path: |
             versions/*/build/libs/cop-*.jar
             !versions/*/build/libs/cop-*-sources.jar
