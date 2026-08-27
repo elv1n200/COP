@@ -53,6 +53,7 @@ import cop.utils.ThemeManager.theme
 import cop.utils.WorldUtils.day
 import cop.utils.ui.cursor
 import cop.utils.ui.elements.themedInput
+import cop.utils.ui.hud.Hud
 import cop.utils.ui.hud.HudManager
 import cop.utils.ui.onHover
 import cop.utils.ui.rendering.NVGRenderer
@@ -437,9 +438,11 @@ object ClickGui : Module(
     }
 
     /** Open the HUD editor as a child of the Control Center. */
-    fun openHudStudio() {
+    fun openHudStudio() = openHudStudio(reveal = null)
+
+    fun openHudStudio(reveal: Hud?) {
         openingHudStudio = true
-        HudManager.openEditor(fromMain = true)
+        HudManager.openEditor(fromMain = true, reveal = reveal)
     }
 
     private fun ElementScope<Column>.categoryNavigation(category: Category, onSelect: () -> Unit) {

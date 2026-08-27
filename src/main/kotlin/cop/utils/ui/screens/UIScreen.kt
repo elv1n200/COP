@@ -4,7 +4,6 @@ import cop.CopMod.mc
 import cop.api.abobaui.AbobaUI
 import cop.api.input.CatKeyboard.Modifier.isCtrlDown
 import cop.api.input.CatKeys
-import cop.utils.Scheduler.scheduleTask
 import cop.utils.sf
 import cop.utils.ui.rendering.NVGSpecialRenderer
 import net.minecraft.client.gui.GuiGraphics
@@ -122,6 +121,11 @@ class UIScreen(
             ui: AbobaUI.Instance,
             background: Boolean = true,
             onUserClose: (() -> Unit)? = null,
-        ) = scheduleTask { mc.setScreen(UIScreen(ui, background, onUserClose)) }
+        ) = mc.schedule {
+            // Always defer screen replacement, even on the render thread.
+            // This keeps nested onClose callbacks from replacing a screen and
+            // then having Screen.onClose() immediately clear the replacement.
+            mc.setScreen(UIScreen(ui, background, onUserClose))
+        }
     }
 }

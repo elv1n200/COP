@@ -57,6 +57,10 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Selector-/Segmented-Reset, dynamische Settings-Operationen, Such-/Scroll-
   Zustände und direkte Screen-Wechsel zwischen Control Center und HUD Studio
   wurden korrigiert.
+- HUD Studio reagiert wieder zuverlässig: Vorschauen, Auswahl, Dragging,
+  Popups und Snapping teilen erneut dieselbe Root-Koordinate; der Editor lässt
+  sich auch außerhalb einer geladenen Welt öffnen und „Position bearbeiten“
+  zeigt das gewählte HUD selbst bei deaktiviertem Modul bzw. HUD-Schalter.
 - Startabsturz auf Minecraft 26.1.2 behoben: Auto Terms wertet intrinsische
   Item-Glints erst nach dem Registry-Bootstrap aus (`Components not bound yet`).
 

@@ -55,8 +55,11 @@ object HudManager { // todo add hud grouping
     private var selected: Popup? = null
     private var lineX: Float = -1f
     private var lineY: Float = -1f
-    private var returnToControlCenter = false
     private const val SNAP_THRESHOLD = 5f
+
+    private class EditorSession(val returnOnRemove: Boolean = false) {
+        var returnToControlCenter = false
+    }
 
     init {
         EventBus.on<GuiEvent.Open.Post> {
@@ -102,17 +105,27 @@ object HudManager { // todo add hud grouping
 
     var hudSettings: Popup? = null
 
-    fun openEditor(fromMain: Boolean = false) {
-        returnToControlCenter = false
+    fun openEditor(fromMain: Boolean = false) = openEditor(fromMain, reveal = null)
+
+    fun openEditor(fromMain: Boolean, reveal: Hud?) {
+        val session = EditorSession()
         open(
-            editor(fromMain),
+            editor(session, reveal),
             onUserClose = {
-                if (fromMain) returnToControlCenter = true
+                if (fromMain) {
+                    session.returnToControlCenter = true
+                    open(clickGui)
+                }
             },
         )
     }
 
-    fun editor(fromMain: Boolean = false) = aboba(HUD_EDITOR_TITLE) {
+    fun editor(fromMain: Boolean = false) = editor(
+        EditorSession(returnOnRemove = fromMain),
+        reveal = null,
+    )
+
+    private fun editor(session: EditorSession, reveal: Hud?) = aboba(HUD_EDITOR_TITLE) {
 
         ui.debug = Test.uiDebug
         var hoverInfo: Popup? = null
@@ -129,8 +142,7 @@ object HudManager { // todo add hud grouping
         }
 
         onRemove {
-            val shouldReturnToControlCenter = fromMain && returnToControlCenter
-            returnToControlCenter = false
+            val returningToControlCenter = session.returnToControlCenter || session.returnOnRemove
             selected?.closePopup()
             selected = null
             hudSettings?.closePopup()
@@ -138,8 +150,8 @@ object HudManager { // todo add hud grouping
             lineX = -1f
             lineY = -1f
             scheduleTask { Config.save() }
-            reinit(immediately = false)
-            if (shouldReturnToControlCenter) open(clickGui)
+            if (session.returnOnRemove) open(clickGui)
+            if (!returningToControlCenter) reinit(immediately = false)
         }
 
         onClick {
@@ -148,11 +160,11 @@ object HudManager { // todo add hud grouping
             ui.unfocus()
         }
 
-        // Keep movable previews in their own z-layer. They can reorder inside
-        // this group without ever covering the editor toolbar below.
-        val hudLayer = group(copies()) {
-            dragSelection()
-        }
+        // Selection and HUD previews intentionally remain direct children of
+        // the UI root. Several editor interactions (hit testing, popups,
+        // snapping and position persistence) use root coordinates, and an
+        // intermediate full-screen input group makes those paths disagree.
+        dragSelection()
 
         val toolbar = block(
             constrain(
@@ -201,8 +213,7 @@ object HudManager { // todo add hud grouping
                 cursor(CursorShape.HAND)
                 text("Done", size = 12.px, colour = theme.onPrimaryContainer)
                 onClick {
-                    if (fromMain) returnToControlCenter = true
-                    mc.setScreen(null)
+                    mc.screen?.onClose()
                     true
                 }
             }
@@ -218,9 +229,10 @@ object HudManager { // todo add hud grouping
         }
 
         huds.forEach { hud ->
-            val element = hud.Element()
-            hudLayer.element.addElement(element)
-            element.init()
+            val element = hud.Element().apply {
+                editorPreview = hud === reveal
+            }
+            element.add()
 
             Hud.Scope(element, preview = true).apply {
                 hud.builder(this)

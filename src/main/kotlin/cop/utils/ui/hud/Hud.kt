@@ -92,8 +92,16 @@ open class Hud(
 
     inner class Element : Group(constrain(x.value.percent, y.value.percent, IsolatedBounding, IsolatedBounding)) {
 
+        /** Makes a HUD reachable from its "edit location" action even while
+         * its module or own toggle is disabled. Runtime overlays never set it. */
+        var editorPreview = false
+
         override var enabled: Boolean = true
-            get() = field && (this@Hud.module.enabled || this@Hud.module.alwaysActive) && (this@Hud.enabled || !this@Hud.toggleable)
+            get() = editorPreview || (
+                field &&
+                    (this@Hud.module.enabled || this@Hud.module.alwaysActive) &&
+                    (this@Hud.enabled || !this@Hud.toggleable)
+                )
 
         override var usingCtx: Boolean = true
 

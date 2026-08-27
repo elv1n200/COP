@@ -103,7 +103,7 @@ class HudComponent<T : Hud>(
                     ) {
                         cursor(CursorShape.HAND)
                         onClick(nonSpecific = true) {
-                            openHudStudio()
+                            openHudStudio(value)
                             true
                         }
                     }
@@ -163,7 +163,7 @@ class HudComponent<T : Hud>(
             ) {
                 cursor(CursorShape.HAND)
                 onClick(nonSpecific = true) {
-                    openHudStudio()
+                    openHudStudio(value)
                     true
                 }
             }
