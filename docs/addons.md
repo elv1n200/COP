@@ -25,7 +25,7 @@ COP is not published to a Maven repository. Put the playable `cop-<version>+mc26
 
 ```kotlin
 dependencies {
-    implementation(files("libs/cop-1.8.0-beta.3+mc26.1.2.jar"))
+    implementation(files("libs/cop-1.8.0-beta.4+mc26.1.2.jar"))
 
     // Add the same Minecraft, Fabric Loader, Fabric API and
     // Fabric Language Kotlin dependencies as your addon normally uses.
@@ -51,7 +51,7 @@ Declare COP as a Fabric dependency and register a `cop` entrypoint in the addon'
     "java": ">=25",
     "fabric-api": ">=0.149.0+26.1.2",
     "fabric-language-kotlin": ">=1.13.9+kotlin.2.3.10",
-    "cop": "=1.8.0-beta.3"
+    "cop": "=1.8.0-beta.4"
   },
   "entrypoints": {
     "cop": [

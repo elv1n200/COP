@@ -80,7 +80,6 @@ object ModuleManager {
             AutoLeap,
             AutoCloseChest,
             CancelInteract,
-            AutoMask,
             AutoGFS,
             AutoPotionBag,
             AutoSuperboom,

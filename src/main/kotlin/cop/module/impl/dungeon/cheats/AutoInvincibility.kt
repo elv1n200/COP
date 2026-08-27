@@ -29,10 +29,7 @@ import cop.utils.skyblock.player.PlayerUtils.rightClick
 import cop.utils.skyblock.player.SwapManager
 import cop.utils.skyblock.player.SwapResult
 
-/**
- * Complete Spirit -> Phoenix -> Bonzo survival chain. Mask and pet actions are
- * independent COP implementations and do not modify the legacy Auto Mask module.
- */
+/** Complete Spirit -> Phoenix -> Bonzo survival chain. */
 object AutoInvincibility : Module(
     "Auto Invincibility",
     area = Island.Dungeon,
@@ -57,6 +54,7 @@ object AutoInvincibility : Module(
     private val statusMessages by switch("Status messages", true, desc = "Reports chain actions and failures in chat.")
 
     private var actionJob: Job? = null
+    private var requestedMaskJob: Job? = null
     private var pendingProc: InvincibilityType? = null
     private var previousPet: String? = null
     private var phoenixRestorePending = false
@@ -85,7 +83,7 @@ object AutoInvincibility : Module(
                 phoenixWatchId++
                 phoenixRestorePending = restorePet && !previousPet.isNullOrBlank()
             }
-            if (actionJob?.isActive == true) {
+            if (actionJob?.isActive == true || requestedMaskJob?.isActive == true) {
                 // A save can proc while the previous hidden menu action is
                 // finishing. Queue it instead of silently breaking the chain.
                 pendingProc = proc
@@ -169,20 +167,52 @@ object AutoInvincibility : Module(
         }
     }
 
-    /** True only when this module will perform an action for this exact proc in
-     * the current dungeon state. Legacy Auto Mask uses this to remain a valid
-     * fallback without racing the full invincibility chain. */
-    internal fun willHandleProc(proc: InvincibilityType): Boolean {
-        if (!enabled || !Dungeon.inDungeons || Dungeon.isDead) return false
-        if (bossOnly && !Dungeon.inBoss) return false
-        if (p3Only && !Dungeon.inP3) return false
+    /**
+     * Shared mask action for composite dungeon modules such as Auto I4.
+     * It deliberately works independently of this module's enabled state, but
+     * uses a separate automation owner so it can never race the full chain.
+     */
+    internal fun requestMaskEquip(maskName: String): Boolean {
+        val player = mc.player ?: return false
+        if (Dungeon.isDead || Dungeon.inTerminal || mc.screen != null) return false
+        if (actionJob?.isActive == true || requestedMaskJob?.isActive == true) return false
+        if (player.inventory.getItem(39).displayName.string.contains(maskName, ignoreCase = true)) return false
+        if (!AutomationCoordinator.acquire(
+                REQUESTED_MASK_OWNER,
+                8_000L,
+                Channel.INVENTORY,
+                Channel.MOVEMENT,
+                Channel.INTERACTION,
+            )) return false
 
-        return availableCandidates(proc).isNotEmpty() ||
-            (restorePet && isPhoenixEquipped() && !previousPet.isNullOrBlank())
+        val epoch = worldEpoch
+        val job = scope.launch(clientDispatcher, start = CoroutineStart.LAZY) {
+            try {
+                equipMask(maskName, announce = false)
+            } finally {
+                AutomationCoordinator.release(REQUESTED_MASK_OWNER)
+            }
+        }
+        requestedMaskJob = job
+        job.invokeOnCompletion {
+            mc.execute {
+                if (requestedMaskJob !== job) return@execute
+                requestedMaskJob = null
+                finishPendingActivity(epoch)
+            }
+        }
+        job.start()
+        return true
     }
 
-    private suspend fun equipMask(maskName: String): Boolean {
-        status("&eEquipping $maskName.")
+    /** Cancel only a mask action requested by another dungeon module. */
+    internal fun cancelRequestedMaskEquip() {
+        requestedMaskJob?.cancel()
+        AutomationCoordinator.release(REQUESTED_MASK_OWNER)
+    }
+
+    private suspend fun equipMask(maskName: String, announce: Boolean = true): Boolean {
+        if (announce) status("&eEquipping $maskName.")
         val success = ContainerUtils.getContainerItemsClick(
             command = "eq",
             container = "Your Equipment and Stats",
@@ -194,7 +224,7 @@ object AutoInvincibility : Module(
             closeAfterClick = true,
         )
         delay(100L)
-        if (!success) status("&cFailed to equip $maskName.")
+        if (!success && announce) status("&cFailed to equip $maskName.")
         return success
     }
 
@@ -314,6 +344,16 @@ object AutoInvincibility : Module(
         if (actionJob !== job) return
         actionJob = null
 
+        finishPendingActivity(epoch)
+    }
+
+    /**
+     * Resume queued survival work only after both the automatic chain and an
+     * Auto-I4-requested mask action have released their automation leases.
+     */
+    private fun finishPendingActivity(epoch: Int) {
+        if (actionJob?.isActive == true || requestedMaskJob?.isActive == true) return
+
         val queued = pendingProc
         pendingProc = null
         if (queued != null && enabled && epoch == worldEpoch && !Dungeon.isDead) {
@@ -343,6 +383,7 @@ object AutoInvincibility : Module(
     }
 
     private const val OWNER = "AutoInvincibility"
+    private const val REQUESTED_MASK_OWNER = "AutoInvincibilityRequestedMask"
     private val PRIORITY = listOf(InvincibilityType.SPIRIT, InvincibilityType.PHOENIX, InvincibilityType.BONZO)
     private val ROD_BLACKLIST = setOf("SOUL_WHIP", "FLAMING_FLAY", "GRAPPLING_HOOK")
 }

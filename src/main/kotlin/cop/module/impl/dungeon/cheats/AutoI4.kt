@@ -15,6 +15,7 @@ import cop.api.skyblock.dungeon.DungeonClass
 import cop.api.skyblock.dungeon.P3Section
 import cop.api.skyblock.invoke
 import cop.module.Module
+import cop.module.settings.Setting.Companion.json
 import cop.module.settings.UIComponent.Companion.childOf
 import cop.utils.ChatUtils.modMessage
 import cop.utils.Scheduler
@@ -77,12 +78,14 @@ object AutoI4 : Module(
 
     private val supportHeader by text("I4 support actions")
     private val autoRod by switch("Auto rod", true).childOf(::supportHeader)
-    private val autoMask by switch("Auto mask", true).childOf(::supportHeader)
+    private val maskSupport by switch("Mask support", true)
+        .json("Auto mask")
+        .childOf(::supportHeader)
     private val maskName by selector(
         "Mask",
         "Bonzo's Mask",
         listOf("Bonzo's Mask", "Spirit Mask")
-    ).childOf(::autoMask)
+    ).childOf(::maskSupport)
     private val autoLeap by switch("Auto leap", true).childOf(::supportHeader)
     private val leapToMelody by switch(
         "Prefer Melody",
@@ -149,7 +152,7 @@ object AutoI4 : Module(
             if (!isOnDevice()) return@on
 
             if (autoRod && !rodDone && runTick >= 174) startRodAction()
-            if (autoMask && !maskDone && runTick >= 244) startMaskAction()
+            if (maskSupport && !maskDone && runTick >= 244) startMaskAction()
             if (autoLeap && !leapDone && runTick >= 307) startLeapAction()
         }
 
@@ -414,7 +417,7 @@ object AutoI4 : Module(
     }
 
     private fun startMaskAction() {
-        if (AutoMask.triggerEquip(maskName.selected)) maskDone = true
+        if (AutoInvincibility.requestMaskEquip(maskName.selected)) maskDone = true
     }
 
     private fun startLeapAction() {
@@ -479,7 +482,7 @@ object AutoI4 : Module(
         resetSessionState(restoreRod = !worldChanged)
         scheduledTasks.toList().forEach(Scheduler.Task::cancel)
         scheduledTasks.clear()
-        if (cancelMaskSwap) AutoMask.cancelPendingEquip()
+        if (cancelMaskSwap) AutoInvincibility.cancelRequestedMaskEquip()
         AutomationCoordinator.release(AIM_OWNER)
         AutomationCoordinator.release(ROD_OWNER)
     }

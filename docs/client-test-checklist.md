@@ -130,7 +130,7 @@ Die Prüfsumme lässt sich unter Windows mit `Get-FileHash <jar> -Algorithm SHA2
 - [ ] **Door Opener** in Triggerbot und Aura: ausschließlich noch geschlossene, gescannte Wither-/Blood-Türen in Reichweite öffnen; keine normale Tür oder bereits offene Position anklicken.
 - [ ] **Auto Dungeon Potion** mit leerem Slot, vollem Inventar, vorhandenem Potion-Tier, fehlendem Cookie und fehlender Potion testen; verstecktes Menü wird auf jedem Erfolgs-/Fehlerpfad geschlossen.
 - [ ] Legacy **Auto Potion Bag** und Auto Dungeon Potion gemeinsam aktivieren: die alte Funktion öffnet kein zweites konkurrierendes Potion-Bag-Menü.
-- [ ] **Auto Invincibility** mit Spirit → Phoenix → Bonzo prüfen; Pet-Menu- und Rod-Autopet-Modus getrennt, vorheriges Pet nach Phoenix-Proc/Timeout wiederhergestellt, kein doppeltes Menü mit Legacy Auto Mask.
+- [ ] **Auto Invincibility** mit Spirit → Phoenix → Bonzo prüfen; Pet-Menu- und Rod-Autopet-Modus getrennt, vorheriges Pet nach Phoenix-Proc/Timeout wiederhergestellt und keine parallelen Maskenmenüs mit Auto I4.
 - [ ] **Auto Wither Cloak** am konfigurierten F7-Countdown prüfen; ursprünglicher Hotbar-Slot wird wiederhergestellt und verspätete Tasks feuern nach Weltwechsel/Disable nicht.
 - [ ] **Barrier Boom** in S1, S2 und S3: nur die echte Gate-Fläche und nur in Reichweite akzeptieren; andere Barrier-Blöcke sowie gleichzeitiges Auto Superboom lösen keine Doppelaktion aus.
 - [ ] **Debuff Helper** mit Last Breath: Server-Swing-/Use-Sequenz, Ladezeit, Dragon-/Phase-Auswahl, Release/Redraw und Abbruch bei Itemwechsel/Weltwechsel prüfen.

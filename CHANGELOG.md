@@ -27,6 +27,9 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Das redundante Legacy-Modul **Auto Mask** wurde entfernt. Auto I4 behält
+  seine zeitgesteuerte Masken-Unterstützung und verwendet dafür jetzt den
+  koordinierten Maskenwechsel von Auto Invincibility.
 - ClickGUI vollständig als zentriertes **COP Control Center** mit globaler
   Suche, Kategorie-Navigation, sichtbaren Modulschaltern und eigenem
   Detail-/Settings-Bereich neu gestaltet.
